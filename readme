@@ -1,0 +1,7 @@
+version:
+(1)record_success_fail.py+train_reward_classifier.py（cpu）
+指令：
+  python record_success_fail.py
+  JAX_PLATFORMS=cpu python train_reward_classifier.py --exp_name=galaxea_usb_insertion
+
+环境：

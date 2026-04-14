@@ -36,6 +36,10 @@
 # （3）相机序列号
 # 最终可以都写进config.py中
 
+#查询详细相机接口，修改配置的相机接口（realsense相机序列号固定，不会出问题，但是zed相机的dev/video会变）
+
+
+
 """
 Galaxea Dual Arm Environment for HIL-SERL
 Author: Eren
@@ -183,7 +187,10 @@ class GalaxeaDualArmEnv(gym.Env):
         
 
         # 头部 ZED 使用 V4L2 驱动，并强制开启硬件 MJPG 压缩以节省 USB 带宽，防止绿屏
-        zed_cv2 = cv2.VideoCapture(14, cv2.CAP_V4L2)
+        ##################
+        #zed2相机接口修改处
+        ##################
+        zed_cv2 = cv2.VideoCapture(2, cv2.CAP_V4L2)
         zed_cv2.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         zed_cv2.set(cv2.CAP_PROP_FRAME_WIDTH, 1344)  # ZED 双目原始宽度
         zed_cv2.set(cv2.CAP_PROP_FRAME_HEIGHT, 376)  # ZED 原始高度

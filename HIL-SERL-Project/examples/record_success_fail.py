@@ -1,4 +1,11 @@
-
+#需要Ros2Bridge
+#需要vr介入
+#即：
+# 走真实环境导入链。
+# 所以一路导到：
+# wrapper.py
+# dual_galaxea_env.py
+# rs_capture.py
 
 import os
 import sys
