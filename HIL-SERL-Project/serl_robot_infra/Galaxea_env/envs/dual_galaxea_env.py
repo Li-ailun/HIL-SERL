@@ -103,6 +103,10 @@ class GalaxeaImageDisplayer(threading.Thread):
         self.daemon = True  # 设置为守护线程，# 守护线程：主程序结束时，显示窗口会自动关闭
 
     def run(self):
+        window_name = "Galaxea Vision Monitor"
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, 1400, 500)
+
         while True:
             # 阻塞式获取队列中的图像字典
             img_dict = self.queue.get()
@@ -117,10 +121,17 @@ class GalaxeaImageDisplayer(threading.Thread):
                 img_dict.get("right_wrist_rgb", np.zeros((128,128,3), dtype=np.uint8))
             ], axis=1)
 
+            # 把 384x128 放大成更适合人眼观察的尺寸
+            display_frame = cv2.resize(
+                frame,
+                (1152, 384),   # 3倍放大
+                interpolation=cv2.INTER_NEAREST
+            )
+
             # OpenCV 显示需要 BGR 格式
             # OpenCV 在 Linux 环境下默认使用 BGR，而模型和存储使用 RGB，此处需转换
             #(zhuan rgb de jian kong hua mian) cv2.imshow('Galaxea Dual Arm Vision', cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-            cv2.imshow('Galaxea Vision Monitor', frame) # 直接写入，因为 full_res_images 存的是 BGR
+            cv2.imshow(window_name, display_frame) # 直接写入，因为 full_res_images 存的是 BGR
             cv2.waitKey(1)  # 维持窗口响应的最小等待时间
 
 
@@ -128,7 +139,7 @@ class GalaxeaImageDisplayer(threading.Thread):
 #  主环境类：GalaxeaDualArmEnv
 # ==============================================================================
 class GalaxeaDualArmEnv(gym.Env):
-    def __init__(self, config, cfg, display_images=False, save_video=False, hz=15, max_episode_length=100):
+    def __init__(self, config, cfg, display_images=False, save_video=False, hz=15, max_episode_length=10000):
         super().__init__()
 
 
@@ -138,6 +149,9 @@ class GalaxeaDualArmEnv(gym.Env):
 
         self.hz = hz  #控制频率15hz      # 控制频率，HIL-SERL ，目前推荐 10-15Hz
         
+        ##############
+        #这个env脚本和录制demo脚本谁设置的步长短，谁就决定终止录制的最长步数
+        ##############
         self.max_episode_length = max_episode_length  # 单局最大步数 (100步大约6.6秒)   # 单局最大步数，超时将强制 Reset
         self.curr_path_length = 0  # 当前局已经走了多少步   # 当前回合步数计数器
  
@@ -188,9 +202,9 @@ class GalaxeaDualArmEnv(gym.Env):
 
         # 头部 ZED 使用 V4L2 驱动，并强制开启硬件 MJPG 压缩以节省 USB 带宽，防止绿屏
         ##################
-        #zed2相机接口修改处
+        #zed2相机接口修改处v4l2-ctl --list-devices
         ##################
-        zed_cv2 = cv2.VideoCapture(2, cv2.CAP_V4L2)
+        zed_cv2 = cv2.VideoCapture(8, cv2.CAP_V4L2)
         zed_cv2.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
         zed_cv2.set(cv2.CAP_PROP_FRAME_WIDTH, 1344)  # ZED 双目原始宽度
         zed_cv2.set(cv2.CAP_PROP_FRAME_HEIGHT, 376)  # ZED 原始高度

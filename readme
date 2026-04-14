@@ -5,3 +5,9 @@ version:
   JAX_PLATFORMS=cpu python train_reward_classifier.py --exp_name=galaxea_usb_insertion
 
 环境：
+环境依赖清单：保存在了example下
+环境备份：hilserl_gpu_cf_backup
+
+cpu可用，gpu不可用训练奖励函数的环境冲突：
+yTorch 是被真实环境env链拉进来的，主要影响真机脚本；
+TensorFlow 是被 train_utils 拉进来的，影响 train_reward_classifier.py 和 train_rlpd.py。
