@@ -66,7 +66,7 @@ from serl_launcher.utils.train_utils import concat_batches
 from serl_launcher.vision.data_augmentations import batched_random_crop
 from serl_launcher.networks.reward_classifier import create_classifier
 
-from galaxea_task.mappings import CONFIG_MAPPING
+from examples.galaxea_task.mappings import CONFIG_MAPPING
 
 
 FLAGS = flags.FLAGS

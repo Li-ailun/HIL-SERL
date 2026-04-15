@@ -11,6 +11,24 @@
 # 训练阶段：纯离线，不需要真机
 # 评估阶段：需要真实环境
 
+#python train_bc.py --exp_name=galaxea_usb_insertion --eval_n_trajs=0（0表示离线训练模式）
+#python train_bc.py --exp_name=galaxea_usb_insertion --eval_n_trajs=10（10表示在线评估模式，评估10个episode）
+
+#完整离线训练参考指令：
+# python train_bc.py \
+#   --exp_name=galaxea_usb_insertion \
+#   --eval_n_trajs=0 \
+#   --train_steps=20000 \
+#   --bc_checkpoint_path=./bc_checkpoints
+
+
+#完整在线评估参考指令：
+# python train_bc.py \
+#   --exp_name=galaxea_usb_insertion \
+#   --eval_n_trajs=5 \
+#   --bc_checkpoint_path=./bc_checkpoints \
+#   --save_video=False
+
 import os
 import sys
 import glob
@@ -44,7 +62,7 @@ from serl_launcher.agents.continuous.bc import BCAgent
 from serl_launcher.utils.launcher import make_bc_agent, make_wandb_logger
 from serl_launcher.data.data_store import MemoryEfficientReplayBufferDataStore
 
-from examples.galaxea_task.usb_pick_insertion.wrapper import make_env
+
 from examples.galaxea_task.usb_pick_insertion.config import env_config
 
 FLAGS = flags.FLAGS
@@ -279,9 +297,10 @@ def main(_):
     # 🎮 评估模式：才创建真实环境
     # ==========================================================
     else:
-        env = make_env(
-            reward_classifier_model=None,
-            use_manual_reward=False,
+        env = env_config.get_environment(
+            fake_env=False,
+            save_video=False,
+            classifier=False,
         )
         env = RecordEpisodeStatistics(env)
 
@@ -317,6 +336,9 @@ def main(_):
 
 if __name__ == "__main__":
     app.run(main)
+
+
+
 
 # import glob
 # import time

@@ -22,7 +22,8 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
-from examples.galaxea_task.usb_pick_insertion.wrapper import make_env
+# 导入任务配置入口
+from examples.galaxea_task.usb_pick_insertion.config import env_config
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string("exp_name", "galaxea_usb_insertion", "Name of experiment corresponding to folder.")
@@ -74,7 +75,11 @@ def main(_):
     )
     listener.start()
 
-    env = make_env(reward_classifier_model=None, use_manual_reward=False)
+    env = env_config.get_environment(
+        fake_env=False,
+        save_video=False,
+        classifier=False,
+    )
 
     obs, _ = env.reset()
     print("✅ 环境已重置，开始高频采集...")

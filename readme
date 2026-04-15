@@ -11,3 +11,66 @@ version:
 cpu可用，gpu不可用训练奖励函数的环境冲突：
 yTorch 是被真实环境env链拉进来的，主要影响真机脚本；
 TensorFlow 是被 train_utils 拉进来的，影响 train_reward_classifier.py 和 train_rlpd.py。
+
+
+
+
+第一优先级
+
+把 wrapper.py 里的 make_env() 从“环境总装器”降级掉。
+
+因为官方环境拼装应该在 TrainConfig.get_environment()。
+你现在 make_env() 有重复装配嫌疑。
+
+第二优先级
+
+把 dual_galaxea_env.py 里所有任务常量往 EnvConfig 挪。
+
+比如：
+
+max_episode_length
+相机 serial
+zed index
+pos_scale
+rot_scale
+限位
+
+这些官方都更倾向于放任务配置，不放底层通用 env。
+
+第三优先级
+
+把 galaxea_task/config.py 彻底变成纯抽象基类。
+
+这一步你已经准备做了，方向正确。
+
+
+你后面最好整理成这种结构：
+
+galaxea_task/config.py
+
+只做抽象基类
+
+galaxea_task/mappings.py
+
+只做任务名路由
+
+galaxea_task/usb_pick_insertion/config.py
+
+只做：
+
+任务常量
+训练配置
+环境装配
+galaxea_task/usb_pick_insertion/wrapper.py
+
+只做：
+
+任务 env 子类
+任务 reset / go_to_reset
+任务 penalty wrapper
+serl_robot_infra/Galaxea_env/envs/dual_galaxea_env.py
+
+只做：
+
+通用双臂底层 env
+不要再写死 USB 任务特定东西

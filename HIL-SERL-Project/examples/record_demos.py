@@ -50,7 +50,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
 # 导入你任务定制的环境构建函数
-from examples.galaxea_task.usb_pick_insertion.wrapper import make_env
+from examples.galaxea_task.usb_pick_insertion.config import env_config
 
 # ==============================================================
 # ⚙️ 命令行参数配置
@@ -94,9 +94,10 @@ def main(_):
     # 录制专家演示阶段：
     # - 真实环境
     # - 使用人工成功/失败打分
-    env = make_env(
-        reward_classifier_model=None,
-        use_manual_reward=True,
+    env = env_config.get_environment(
+        fake_env=False,
+        save_video=False,
+        classifier=False,
     )
 
     obs, info = env.reset()

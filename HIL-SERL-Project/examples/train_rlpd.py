@@ -48,7 +48,6 @@ if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
 # 💡 直调星海图专属定制的环境和配置
-from examples.galaxea_task.usb_pick_insertion.wrapper import make_env
 from examples.galaxea_task.usb_pick_insertion.config import env_config 
 
 FLAGS = flags.FLAGS
@@ -429,9 +428,10 @@ def main(_):
 
     # 实例化环境结构
     # 若为 Learner，则只起一个空壳环境用于获取维度，不调用真实相机 (fake_env=True)
-    env = make_env(
-        reward_classifier_model=None, 
-        use_manual_reward=False, 
+    env = env_config.get_environment(
+        fake_env=False,
+        save_video=False,
+        classifier=False,
     )
     env = RecordEpisodeStatistics(env)
 
