@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 #人类在环监督+RL
 
-# 1. Learner 模式
+# 1. Learner 模式（训练网络参数-生成权重）
 # --learner=True
 
 # 作用是：
-
 # 启动后台训练服务
 # 维护两个 buffer
 # 一个是在线探索经验 replay_buffer，一个是专家/人工干预经验 demo_buffer
@@ -14,11 +13,16 @@
 # 定期发布最新参数给 Actor
 # 定期保存 checkpoint。
 
-# 2. Actor 模式
+# JAX GPU
+# 训练依赖链
+# SAC / RLPD 更新稳定性
+# checkpoint 保存恢复
+# 大 batch / 长时间训练
+
+# 2. Actor 模式（接受数据-传给learn）
 # --actor=True
 
 # 作用是：
-
 # 连接真实环境
 # 执行策略动作
 # 接收 VR 干预
@@ -26,31 +30,95 @@
 # 把人工干预阶段的数据单独推给 demo_buffer
 # 定期把本地缓存保存成 buffer/*.pkl 和 demo_buffer/*.pkl。
 
-# 3. Actor 评估模式
+# 连真实环境
+# 接收 ROS 状态
+# 相机采图
+# 训练 Actor 时支持 VR 干预
+# 跑策略前向推理
+# 把 transition 发给 Learner
+
+# 3. Actor 评估模式（状态输入-加载权重-输出动作）
 # --actor=True --eval_checkpoint_step=xxx --eval_n_trajs=N
 
 # 作用是：
-
 # 不参与训练
 # 只加载某一步 checkpoint
 # 在真实环境中做纯推理评估
 # 统计成功率和耗时。
 
 
-# (1)Learner 不该碰真机、
-# (2)Actor 训练要保留 VR 干预、
-# (3)Actor 评估不要 VR，但保留 ROS/相机/分类器。
 
-#!/usr/bin/env python3
-# 人类在环监督 + RLPD
-# 保留官方训练 / 算法结构
-# 只适配你当前的任务环境链路（Galaxea + VR + ROS + classifier）
+#####################################################################
+#执行脚本：
+# Learner 训练端
+# 这个端负责：
+# 吃 demo 数据
+# 等 Actor 送在线数据
+# 做 RLPD / SAC 更新
+# 存 checkpoint
 
+# python train_rlpd.py \
+#   --exp_name=galaxea_usb_insertion \
+#   --learner=True \
+#   --ip=localhost \
+#   --demo_path=./demo_data \
+#   --checkpoint_path=./rlpd_checkpoints \
+#   --debug=True
+
+# python train_rlpd.py \
+#   --exp_name=galaxea_usb_insertion \
+#   --actor=True \
+#   --ip=localhost \
+#   --checkpoint_path=./rlpd_checkpoints \
+#   --debug=True
+
+
+#含义
+  # 1,--learner=True
+# 启动 Learner 端。负责训练和参数更新。
+
+# 2,--actor=True
+  # 启动 Actor 端。负责真机交互和数据采集。
+
+# 3,--ip=...
+  # Actor 连接 Learner 的地址；单机就写 localhost。
+
+# 4,--demo_path=  ./demo_data \
+  # Learner 启动时加载初始 demo 数据，灌进 demo_buffer。
+
+# 5,--checkpoint_path=  ./rlpd_checkpoints \
+  # 保存和读取：
+
+  # checkpoint
+  # buffer/*.pkl
+  # demo_buffer/*.pkl
+
+# 7,  --eval_checkpoint_step= n   （和）
+  # 大于 0 就进入  actor评估模式，不做训练采集。
+  # 只评估第n步生成的权重
+  # = 0 或者不写默认  learn或者actor模式
+
+# 8,  --eval_n_trajs=...
+  # 评估时跑多少条 episode。
+
+# 9,  --save_video=True/False
+  # 评估时是否保存视频。你的 config.py 已经支持这个参数一路传进去。
+
+# 10, --debug=True（False或者不输入debug则默认wandb记录）
+  # 关闭 wandb 上传，适合先本地调通
+
+
+########################################################################
 
 #################################################
 #功能配置
 #reward功能：
 #train_rlpd.py actor 训练：通常应该开 classifier，因为 RLPD 训练需要奖励信号
+
+
+# (1)Learner 不该碰真机、
+# (2)Actor 训练要保留 VR 干预、
+# (3)Actor 评估不要 VR，但保留 ROS/相机/分类器。
 
 ####################################################
 

@@ -40,3 +40,7 @@ train_reward_classifier.py (训练奖励分类器)
 每次训练更新时，一半数据来自专家演示（Demo Buffer），另一半来自机器人自己在环境中摸索的数据（Replay Buffer）。
 它通常使用 SAC（Soft Actor-Critic）算法。
 数学逻辑：利用计算奖励概率 $p$ 的 Sigmoid 函数：
+
+
+
+

@@ -3,6 +3,10 @@
 #python train_bc.py --exp_name=galaxea_usb_insertion --eval_n_trajs=0（0表示离线训练模式）
 #python train_bc.py --exp_name=galaxea_usb_insertion --eval_n_trajs=10（10表示在线评估模式，评估10个episode）
 
+
+###########################################################
+#执行脚本：
+
 #完整离线训练参考指令：
 # python train_bc.py \
 #   --exp_name=galaxea_usb_insertion \
@@ -19,6 +23,11 @@
 #   --save_video=False
 
 #目前可cpu：python train_bc.py --exp_name=galaxea_usb_insertion --eval_n_trajs=0 --debug=True
+
+##################################################################
+
+
+
 
 #############################################
 #功能配置：
