@@ -36,6 +36,9 @@ class GalaxeaUSBEnv(GalaxeaDualArmEnv):
     """星海图双臂 U 盘插拔专属环境"""
 
     def __init__(self, config=None, use_vr=True, **kwargs):
+        if config is None:
+            raise ValueError("GalaxeaUSBEnv 初始化失败：必须传入有效的 config")
+
         self.config = config
         self.use_vr = use_vr
 
@@ -156,6 +159,9 @@ class DualGripperPenaltyWrapper(gym.Wrapper):
 
         real_action = info.get("intervene_action", action)
         real_action = np.asarray(real_action, dtype=np.float32)
+        
+        #默认14纬度，所以6,13对应夹爪，如果机器人变了，就不是了
+        assert real_action.shape[0] >= 14, f"动作维度异常，期望至少 14，实际是 {real_action.shape}"
 
         penalty_val = 0.0
         left_delta, self.left_closed = self._update_one_side(real_action[6], self.left_closed)

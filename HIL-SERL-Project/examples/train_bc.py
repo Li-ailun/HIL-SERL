@@ -1,15 +1,4 @@
-#!/usr/bin/env python3
-#对录制的数据进行第一步处理：bc克隆基本动作，保证强化学习初步试探的动作不会太夸张
-
-#训练：
-#python train_bc.py --exp_name=galaxea_usb_insertion
-#评估：
-#python train_bc.py --exp_name=galaxea_usb_insertion --eval_n_trajs=10
-
-#!/usr/bin/env python3
 # 对录制的数据进行第一步处理：BC 克隆基本动作，保证强化学习初步试探的动作不会太夸张
-# 训练阶段：纯离线，不需要真机
-# 评估阶段：需要真实环境
 
 #python train_bc.py --exp_name=galaxea_usb_insertion --eval_n_trajs=0（0表示离线训练模式）
 #python train_bc.py --exp_name=galaxea_usb_insertion --eval_n_trajs=10（10表示在线评估模式，评估10个episode）
@@ -31,7 +20,16 @@
 
 #目前可cpu：python train_bc.py --exp_name=galaxea_usb_insertion --eval_n_trajs=0 --debug=True
 
+#############################################
+#功能配置：
 
+#vr功能：
+#bc脚本实机评估时记得取消vr模块
+##单独切换 是否使用vr模块 配合bc的训练/评估
+
+#reward功能：
+#train_bc.py 评估模式：可开可不开，但开了更方便自动成功判定
+################################################
 import os
 import sys
 import glob

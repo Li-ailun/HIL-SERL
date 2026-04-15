@@ -74,6 +74,17 @@
 # checkpoint_period
 # get_environment(...)
 
+
+
+
+#环境配置
+#(1)config的get_environment()：config起默认作用，谁引用它谁就可以在自己脚本里修改配置，不引用就使用config的默认配置
+#              如果其他脚本引用了env = env_config.get_environment(fake_env=False,等）则可以在其他脚本里修改配置
+#              如果其他脚本仅是 env = env_config.get_environment()  ，括号内无配置引用，则统一使用config里的配置
+#（2）config的  GalaxeaUSBEnvConfig 里的：HZ = 15，DISPLAY_IMAGES = True等：
+#              写死的，必须在config的GalaxeaUSBEnvConfig 里修改配置
+
+
 import os
 from typing import List
 import cv2
@@ -222,8 +233,8 @@ class GalaxeaUSBTrainConfig(DefaultTrainingConfig):
     def get_environment(
         self,
         fake_env: bool = False,
-        save_video: bool = False,
-        classifier: bool = False,
+        save_video: bool = False,   #该系列任务默认不保存视频，指令控制保存？
+        classifier: bool = False,   #什么意思
         use_vr: bool = True,
     ):
         """
