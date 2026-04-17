@@ -1,0 +1,17 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/teleoperation_msg_ros2__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/teleoperation_msg_ros2/msg/detail/vr_pose__type_support.c.o"
+  "CMakeFiles/teleoperation_msg_ros2__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/teleoperation_msg_ros2/msg/detail/vr_pose__type_support.c.o.d"
+  "CMakeFiles/teleoperation_msg_ros2__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/teleoperation_msg_ros2/srv/detail/switch_control_mode_vr__type_support.c.o"
+  "CMakeFiles/teleoperation_msg_ros2__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/teleoperation_msg_ros2/srv/detail/switch_control_mode_vr__type_support.c.o.d"
+  "libteleoperation_msg_ros2__rosidl_typesupport_introspection_c.pdb"
+  "libteleoperation_msg_ros2__rosidl_typesupport_introspection_c.so"
+  "rosidl_typesupport_introspection_c/teleoperation_msg_ros2/msg/detail/vr_pose__rosidl_typesupport_introspection_c.h"
+  "rosidl_typesupport_introspection_c/teleoperation_msg_ros2/msg/detail/vr_pose__type_support.c"
+  "rosidl_typesupport_introspection_c/teleoperation_msg_ros2/srv/detail/switch_control_mode_vr__rosidl_typesupport_introspection_c.h"
+  "rosidl_typesupport_introspection_c/teleoperation_msg_ros2/srv/detail/switch_control_mode_vr__type_support.c"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang C)
+  include(CMakeFiles/teleoperation_msg_ros2__rosidl_typesupport_introspection_c.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

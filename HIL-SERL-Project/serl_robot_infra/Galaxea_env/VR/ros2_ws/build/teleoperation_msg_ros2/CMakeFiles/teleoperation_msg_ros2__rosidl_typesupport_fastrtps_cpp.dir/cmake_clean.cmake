@@ -1,0 +1,17 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/teleoperation_msg_ros2__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/teleoperation_msg_ros2/msg/detail/dds_fastrtps/vr_pose__type_support.cpp.o"
+  "CMakeFiles/teleoperation_msg_ros2__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/teleoperation_msg_ros2/msg/detail/dds_fastrtps/vr_pose__type_support.cpp.o.d"
+  "CMakeFiles/teleoperation_msg_ros2__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/teleoperation_msg_ros2/srv/detail/dds_fastrtps/switch_control_mode_vr__type_support.cpp.o"
+  "CMakeFiles/teleoperation_msg_ros2__rosidl_typesupport_fastrtps_cpp.dir/rosidl_typesupport_fastrtps_cpp/teleoperation_msg_ros2/srv/detail/dds_fastrtps/switch_control_mode_vr__type_support.cpp.o.d"
+  "libteleoperation_msg_ros2__rosidl_typesupport_fastrtps_cpp.pdb"
+  "libteleoperation_msg_ros2__rosidl_typesupport_fastrtps_cpp.so"
+  "rosidl_typesupport_fastrtps_cpp/teleoperation_msg_ros2/msg/detail/dds_fastrtps/vr_pose__type_support.cpp"
+  "rosidl_typesupport_fastrtps_cpp/teleoperation_msg_ros2/msg/detail/vr_pose__rosidl_typesupport_fastrtps_cpp.hpp"
+  "rosidl_typesupport_fastrtps_cpp/teleoperation_msg_ros2/srv/detail/dds_fastrtps/switch_control_mode_vr__type_support.cpp"
+  "rosidl_typesupport_fastrtps_cpp/teleoperation_msg_ros2/srv/detail/switch_control_mode_vr__rosidl_typesupport_fastrtps_cpp.hpp"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang CXX)
+  include(CMakeFiles/teleoperation_msg_ros2__rosidl_typesupport_fastrtps_cpp.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

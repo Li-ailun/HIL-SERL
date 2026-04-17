@@ -12,7 +12,8 @@
 
 # 实验名
 # 映射到具体任务配置类
-from .usb_pick_insertion.config import GalaxeaUSBTrainConfig
+# from .usb_pick_insertion.config import GalaxeaUSBTrainConfig
+from .usb_pick_insertion_single.config import GalaxeaUSBTrainConfig
 
 CONFIG_MAPPING = {
     "galaxea_usb_insertion": GalaxeaUSBTrainConfig,

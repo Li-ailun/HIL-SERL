@@ -1,0 +1,75 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from teleoperation_msg_ros2/msg/VrPose.msg
+// generated code does not contain a copyright notice
+
+#include "std_msgs/msg/Header.idl"
+
+module teleoperation_msg_ros2 {
+  module msg {
+    struct VrPose {
+      std_msgs::msg::Header header;
+
+      boolean power;
+
+      sequence<float> head_position;
+
+      sequence<float> head_quaternion;
+
+      sequence<float> left_position;
+
+      sequence<float> left_quaternion;
+
+      boolean left_gripper_close;
+
+      sequence<float> right_position;
+
+      sequence<float> right_quaternion;
+
+      boolean right_gripper_close;
+
+      sequence<float> left_j4j6_cmd;
+
+      sequence<float> right_j4j6_cmd;
+
+      boolean left_disconnect_pressed;
+
+      boolean right_disconnect_pressed;
+
+      int8 control_mode;
+
+      int8 manipulation_mode;
+
+      boolean waist_right;
+
+      boolean waist_left;
+
+      boolean tilt_forward;
+
+      boolean tilt_backward;
+
+      boolean torso_up;
+
+      boolean torso_down;
+
+      boolean torso_forward;
+
+      boolean torso_backward;
+
+      float x_vel;
+
+      float y_vel;
+
+      float angular_vel;
+
+      boolean breakpoint;
+
+      boolean exception;
+
+      boolean need_reset_to_init;
+
+      boolean engage_by_operator;
+
+      boolean disengage_by_operator;
+    };
+  };
+};

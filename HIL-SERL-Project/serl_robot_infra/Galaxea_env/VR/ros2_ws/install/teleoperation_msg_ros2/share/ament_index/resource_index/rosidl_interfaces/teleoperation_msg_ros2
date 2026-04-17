@@ -1,0 +1,6 @@
+msg/VrPose.idl
+msg/VrPose.msg
+srv/SwitchControlModeVR.idl
+srv/SwitchControlModeVR.srv
+srv/SwitchControlModeVR_Request.msg
+srv/SwitchControlModeVR_Response.msg

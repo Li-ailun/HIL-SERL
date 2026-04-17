@@ -50,7 +50,8 @@ if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
 # 导入你任务定制的环境构建函数
-from examples.galaxea_task.usb_pick_insertion.config import env_config
+#from examples.galaxea_task.usb_pick_insertion.config import env_config
+from examples.galaxea_task.usb_pick_insertion_single.config import env_config
 
 # ==============================================================
 # ⚙️ 命令行参数配置

@@ -97,11 +97,30 @@ from examples.galaxea_task.config import DefaultTrainingConfig
 
 
 class GalaxeaUSBEnvConfig:
-    """USB 任务的专属硬件与物理配置。"""
+    """
+    usb_pick_insertion_single 的硬件与物理配置。
+
+    目标：
+    1. 使用统一底层 env（GalaxeaArmEnv / 兼容名 GalaxeaDualArmEnv）
+    2. 当前任务切到单臂模式
+    3. 控制右臂
+    4. 三个相机全部保留
+    """
 
     # ==============================
-    # 1. 任务物理参数
+    # 0. 单 / 双臂模式配置
     # ==============================
+    ARM_MODE = "single"
+    ARM_SIDE = "right"
+
+    # ==============================
+    # 1. 单臂 reset 位姿
+    # 说明：
+    # 统一 env 在 single 模式下优先读取 RESET_POSE
+    # ==============================
+    RESET_POSE = np.array([0.2, -0.25, -0.3, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+
+    # 为兼容旧逻辑，保留双臂字段也无妨
     RESET_L = np.array([0.2, 0.25, -0.3, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
     RESET_R = np.array([0.2, 0.25, -0.3, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
 
@@ -113,10 +132,11 @@ class GalaxeaUSBEnvConfig:
     # ==============================
     HZ = 15
     DISPLAY_IMAGES = True
-    MAX_EPISODE_LENGTH = 10000
+    MAX_EPISODE_LENGTH = 500
 
     # ==============================
     # 3. 图像 / 显示配置
+    # 三相机全部保留
     # ==============================
     ENV_IMAGE_KEYS = ["head_rgb", "left_wrist_rgb", "right_wrist_rgb"]
     DISPLAY_IMAGE_KEYS = ["left_wrist_rgb", "head_rgb", "right_wrist_rgb"]
@@ -145,8 +165,8 @@ class GalaxeaUSBEnvConfig:
     }
 
     HEAD_CAMERA = {
-        "device_index": 14,  #v4l2-ctl --list-devices查询
-        "api": cv2.CAP_V4L2,  # # 显式指定使用 Linux V4L2 后端打开 /dev/videoX
+        "device_index": 14,   #v4l2-ctl --list-devices查询
+        "api": cv2.CAP_V4L2,
         "fourcc": "MJPG",
         "frame_width": 1344,
         "frame_height": 376,
@@ -164,21 +184,20 @@ class GalaxeaUSBEnvConfig:
     # ==============================
     # 6. 安全工作空间限位
     # ==============================
-    XYZ_LIMIT_LOW = np.array([0.1, -0.5, -0.1], dtype=np.float64)
-    XYZ_LIMIT_HIGH = np.array([0.7, 0.5, 0.5], dtype=np.float64)
+    XYZ_LIMIT_LOW = np.array([0.1, -0.5, -0.5], dtype=np.float64)
+    XYZ_LIMIT_HIGH = np.array([0.5, 0.5, 0.5], dtype=np.float64)
 
     RPY_LIMIT_LOW = np.array([-np.pi, -np.pi, -np.pi], dtype=np.float64)
     RPY_LIMIT_HIGH = np.array([np.pi, np.pi, np.pi], dtype=np.float64)
 
     # ==============================
     # 7. ROS2 发布配置
+    # 单臂右臂任务只保留右臂发布
     # ==============================
     robot_config = {
         "hardware": "R1_PRO",
         "enable_publish": [
-            "left_ee_pose",
             "right_ee_pose",
-            "left_gripper",
             "right_gripper",
         ],
     }
@@ -190,7 +209,7 @@ class GalaxeaUSBEnvConfig:
 
 
 class GalaxeaUSBTrainConfig(DefaultTrainingConfig):
-    """USB 任务的训练配置与环境装配入口。"""
+    """USB 单臂任务训练配置与环境装配入口。"""
 
     # ==============================
     # 8. 训练超参数
@@ -214,39 +233,41 @@ class GalaxeaUSBTrainConfig(DefaultTrainingConfig):
 
     # ==============================
     # 9. 观测 / 编码配置
+    # 三相机保留；本体状态只保留右臂
     # ==============================
     image_keys: List[str] = ["head_rgb", "left_wrist_rgb", "right_wrist_rgb"]
-    classifier_keys: List[str] = ["head_rgb", "left_wrist_rgb"]
+
+    # 单臂右臂任务更建议分类器关注 head + right wrist
+    classifier_keys: List[str] = ["head_rgb", "right_wrist_rgb"]
+
     proprio_keys: List[str] = [
-        "left_ee_pose",
         "right_ee_pose",
-        "left_gripper",
         "right_gripper",
     ]
 
     encoder_type: str = "resnet-pretrained"
-    setup_mode: str = "dual-arm-learned-gripper"
+    setup_mode: str = "single-arm-learned-gripper"
 
     # ==============================
     # 10. 环境装配
+    # 说明：
+    # 1. 这里默认你后面会让 wrapper_single 使用统一底层 env
+    # 2. 暂时只改 config，不替你改 wrapper 文件本体
     # ==============================
     def get_environment(
         self,
         fake_env: bool = False,
-        save_video: bool = False,   #该系列任务默认不保存视频，指令控制保存？
-        classifier: bool = False,   #什么意思
+        save_video: bool = False,
+        classifier: bool = False,
         use_vr: bool = True,
     ):
-        """
-        任务环境统一装配入口。
-        """
         if fake_env:
             return None
 
-        # 延迟导入，避免循环依赖
-        from examples.galaxea_task.usb_pick_insertion.wrapper import (
+        # 这里改成 single 目录下对应的 wrapper
+        from examples.galaxea_task.usb_pick_insertion_single.wrapper import (
             GalaxeaUSBEnv,
-            DualGripperPenaltyWrapper,
+            SingleGripperPenaltyWrapper,
         )
         from serl_launcher.wrappers.serl_obs_wrappers import SERLObsWrapper
         from serl_launcher.wrappers.chunking import ChunkingWrapper
@@ -286,26 +307,25 @@ class GalaxeaUSBTrainConfig(DefaultTrainingConfig):
 
                 def reward_func(obs):
                     sigmoid = lambda x: 1 / (1 + jnp.exp(-x))
-                    return int(sigmoid(classifier_fn(obs)) > 0.7)
+                    prob = sigmoid(classifier_fn(obs))
+                    prob = np.asarray(jax.device_get(prob)).reshape(-1)[0]
+                    return int(prob > 0.7)
 
                 env = MultiCameraBinaryRewardClassifierWrapper(env, reward_func)
 
             except Exception as e:
                 print(f"⚠️ 分类器加载失败（如果你还没训练它，这属于正常现象）: {e}")
 
-        # 5) 任务特有惩罚
-        env = DualGripperPenaltyWrapper(env, penalty=-0.02)
+        # 5) 单臂 gripper 惩罚
+        env = SingleGripperPenaltyWrapper(env, penalty=-0.02)
 
         return env
 
     # ==============================
     # 11. demo 清洗
+    # 单臂动作从 14 维变成 7 维，但这里逻辑不需要改
     # ==============================
     def process_demos(self, transitions):
-        """
-        对齐官方接口：
-        这里只做最基础的零动作过滤。
-        """
         processed = []
         for trans in transitions:
             if np.linalg.norm(np.asarray(trans["actions"])) > 1e-4:
@@ -315,5 +335,3 @@ class GalaxeaUSBTrainConfig(DefaultTrainingConfig):
 
 # 导出实例，供外部直接 import 使用
 env_config = GalaxeaUSBTrainConfig()
-
-

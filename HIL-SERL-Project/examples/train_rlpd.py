@@ -259,7 +259,8 @@ if PROJECT_ROOT not in sys.path:
 # ==============================================================
 # 任务配置
 # ==============================================================
-from examples.galaxea_task.usb_pick_insertion.config import env_config
+#from examples.galaxea_task.usb_pick_insertion.config import env_config
+from examples.galaxea_task.usb_pick_insertion_single.config import env_config
 
 FLAGS = flags.FLAGS
 
@@ -638,6 +639,12 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger, config):
         time.sleep(1)
     pbar.update(len(replay_buffer) - pbar.n)
     pbar.close()
+
+    # 补发一次当前网络：
+    # 早发一次用于避免 actor 启动时拿不到参数，
+    # 这里再发一次用于和官方“buffer 填满后发网络”的时机对齐。
+    server.publish_network(agent.state.params)
+    print_green("resent initial network to actor after replay buffer warmup")
 
     replay_iterator = replay_buffer.get_iterator(
         sample_args={

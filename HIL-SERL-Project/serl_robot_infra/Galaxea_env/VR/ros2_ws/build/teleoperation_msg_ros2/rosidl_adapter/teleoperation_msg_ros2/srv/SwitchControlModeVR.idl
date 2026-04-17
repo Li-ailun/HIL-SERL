@@ -1,0 +1,17 @@
+// generated from rosidl_adapter/resource/srv.idl.em
+// with input from teleoperation_msg_ros2/srv/SwitchControlModeVR.srv
+// generated code does not contain a copyright notice
+
+
+module teleoperation_msg_ros2 {
+  module srv {
+    struct SwitchControlModeVR_Request {
+      boolean use_vr_mode;
+    };
+    struct SwitchControlModeVR_Response {
+      boolean success;
+
+      string message;
+    };
+  };
+};

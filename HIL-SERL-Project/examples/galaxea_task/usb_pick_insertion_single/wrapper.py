@@ -29,11 +29,24 @@ import time
 import numpy as np
 import gymnasium as gym
 
-from serl_robot_infra.Galaxea_env.envs.dual_galaxea_env import GalaxeaDualArmEnv
+# 如果你已经把统一版底层 env 覆盖到 dual_galaxea_env.py，
+# 这里既可以 import GalaxeaArmEnv，也可以继续 import GalaxeaDualArmEnv（因为我之前做了别名兼容）
+from serl_robot_infra.Galaxea_env.envs.galaxea_arm_env import GalaxeaArmEnv
 
 
-class GalaxeaUSBEnv(GalaxeaDualArmEnv):
-    """星海图双臂 U 盘插拔专属环境"""
+class GalaxeaUSBEnv(GalaxeaArmEnv):
+    """
+    星海图 USB 插拔单臂任务环境（当前按右臂单臂配置）。
+
+    依赖前提：
+    1. 底层 env 已经改成统一版，支持：
+       - ARM_MODE = "single" / "dual"
+       - ARM_SIDE = "left" / "right"
+    2. config 中已经提供：
+       - ARM_MODE = "single"
+       - ARM_SIDE = "right"
+       - RESET_POSE
+    """
 
     def __init__(self, config=None, use_vr=True, **kwargs):
         if config is None:
@@ -42,8 +55,8 @@ class GalaxeaUSBEnv(GalaxeaDualArmEnv):
         self.config = config
         self.use_vr = use_vr
 
-        self.reset_l = np.array(config.RESET_L, dtype=np.float32)
-        self.reset_r = np.array(config.RESET_R, dtype=np.float32)
+        # 单臂 reset 位姿
+        self.reset_pose = np.array(config.RESET_POSE, dtype=np.float32)
 
         # 只有 use_vr=True 时才会用到这些状态
         self.script_control_enabled = False
@@ -80,45 +93,52 @@ class GalaxeaUSBEnv(GalaxeaDualArmEnv):
             print(f"⏳ 已进入脚本控制，额外等待 {remain:.2f}s 后开始复位...")
             time.sleep(remain)
 
-    def _build_reset_targets(self):
-        reset_l = self.reset_l.copy()
-        reset_r = self.reset_r.copy()
+    def _build_reset_target(self):
+        reset_pose = self.reset_pose.copy()
 
-        if self.config.RANDOM_RESET:
+        if getattr(self.config, "RANDOM_RESET", False):
             xy_range = float(self.config.RANDOM_XY_RANGE)
-            reset_l[:2] += np.random.uniform(-xy_range, xy_range, (2,))
-            reset_r[:2] += np.random.uniform(-xy_range, xy_range, (2,))
+            reset_pose[:2] += np.random.uniform(-xy_range, xy_range, (2,))
 
-        return reset_l, reset_r
+        return reset_pose
 
     def go_to_reset(self):
         """
         两种模式：
-        1) use_vr=True：保留原来的 VR 模式切换复位逻辑
+        1) use_vr=True：保留 VR 模式切换复位逻辑
         2) use_vr=False：直接发送 ROS 复位轨迹，不等 VR
         """
-        print("🤖 [USB Task] 正在准备复位...")
+        print("🤖 [USB Task Single Arm] 正在准备复位...")
 
-        reset_l, reset_r = self._build_reset_targets()
+        reset_pose = self._build_reset_target()
 
         if self.use_vr:
             print("💡 【请按 VR 手柄的 Mode 2 键】切到脚本控制模式（会发送 use_vr_mode=False）")
             self._wait_until_script_control_ready(timeout=15.0)
             self._wait_extra_after_false(delay=2.0)
-            print("🤖 [USB Task] 开始向底层发送复位坐标...")
+            print("🤖 [USB Task Single Arm] 开始向底层发送复位坐标...")
         else:
-            print("🤖 [USB Task] 当前为无 VR 模式，直接发送复位轨迹...")
+            print("🤖 [USB Task Single Arm] 当前为无 VR 模式，直接发送复位轨迹...")
 
-        self.interpolate_move(reset_l, reset_r, timeout=3.0)
+        # 统一 env 在 single 模式下提供 interpolate_move_single
+        self.interpolate_move_single(reset_pose, timeout=3.0, gripper=1.0)
         time.sleep(0.5)
 
-        print("✅ 复位坐标发送完毕！")
+        print("✅ 单臂复位坐标发送完毕！")
 
         if self.use_vr:
             print("💡 【请按 VR 手柄的 Mode 0 键】重新夺回机械臂控制权，开始你的表演！")
 
 
-class DualGripperPenaltyWrapper(gym.Wrapper):
+class SingleGripperPenaltyWrapper(gym.Wrapper):
+    """
+    单臂夹爪惩罚 wrapper。
+
+    单臂动作定义：
+        action[0:6] = arm delta
+        action[6]   = gripper command
+    """
+
     def __init__(
         self,
         env,
@@ -130,13 +150,11 @@ class DualGripperPenaltyWrapper(gym.Wrapper):
         self.penalty = penalty
         self.close_thr = close_thr
         self.open_thr = open_thr
-        self.left_closed = None
-        self.right_closed = None
+        self.gripper_closed = None
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
-        self.left_closed = None
-        self.right_closed = None
+        self.gripper_closed = None
         return obs, info
 
     def _update_one_side(self, cmd, prev_closed):
@@ -159,15 +177,12 @@ class DualGripperPenaltyWrapper(gym.Wrapper):
 
         real_action = info.get("intervene_action", action)
         real_action = np.asarray(real_action, dtype=np.float32)
-        
-        #默认14纬度，所以6,13对应夹爪，如果机器人变了，就不是了
-        assert real_action.shape[0] >= 14, f"动作维度异常，期望至少 14，实际是 {real_action.shape}"
 
-        penalty_val = 0.0
-        left_delta, self.left_closed = self._update_one_side(real_action[6], self.left_closed)
-        right_delta, self.right_closed = self._update_one_side(real_action[13], self.right_closed)
+        # 单臂动作维度应为 7
+        assert real_action.shape[0] == 7, f"动作维度异常，期望 7，实际是 {real_action.shape}"
 
-        penalty_val += left_delta + right_delta
+        penalty_val, self.gripper_closed = self._update_one_side(real_action[6], self.gripper_closed)
+
         reward += penalty_val
         info["grasp_penalty"] = penalty_val
 

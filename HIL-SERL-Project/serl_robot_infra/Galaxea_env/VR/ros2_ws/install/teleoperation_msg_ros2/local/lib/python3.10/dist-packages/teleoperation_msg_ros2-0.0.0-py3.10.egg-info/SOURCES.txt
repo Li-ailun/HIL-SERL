@@ -1,0 +1,6 @@
+setup.py
+teleoperation_msg_ros2/__init__.py
+teleoperation_msg_ros2.egg-info/PKG-INFO
+teleoperation_msg_ros2.egg-info/SOURCES.txt
+teleoperation_msg_ros2.egg-info/dependency_links.txt
+teleoperation_msg_ros2.egg-info/top_level.txt

@@ -1,0 +1,233 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"childIndexes" : 
+					[
+						1
+					],
+					"hasInstallRule" : true,
+					"jsonFile" : "directory-.-7584f2928a2988a275b5.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.12"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						5,
+						6,
+						7,
+						8,
+						9,
+						10,
+						11,
+						12,
+						13,
+						14,
+						15,
+						16,
+						17
+					]
+				},
+				{
+					"build" : "teleoperation_msg_ros2__py",
+					"jsonFile" : "directory-teleoperation_msg_ros2__py-eaf2d7672162095900ed.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.12"
+					},
+					"parentIndex" : 0,
+					"projectIndex" : 0,
+					"source" : "/home/eren/HIL-SERL/HIL-SERL-Project/serl_robot_infra/Galaxea_env/VR/ros2_ws/build/teleoperation_msg_ros2/teleoperation_msg_ros2__py",
+					"targetIndexes" : 
+					[
+						4
+					]
+				}
+			],
+			"name" : "",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0,
+						1
+					],
+					"name" : "teleoperation_msg_ros2",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6,
+						7,
+						8,
+						9,
+						10,
+						11,
+						12,
+						13,
+						14,
+						15,
+						16,
+						17
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "ament_cmake_python_build_teleoperation_msg_ros2_egg::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-ament_cmake_python_build_teleoperation_msg_ros2_egg-b8f1d6a1021de8ac47c2.json",
+					"name" : "ament_cmake_python_build_teleoperation_msg_ros2_egg",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "ament_cmake_python_copy_teleoperation_msg_ros2::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-ament_cmake_python_copy_teleoperation_msg_ros2-3143d63fa90eb291e460.json",
+					"name" : "ament_cmake_python_copy_teleoperation_msg_ros2",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2-2c96a1fa6fb90e1d82dd.json",
+					"name" : "teleoperation_msg_ros2",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__cpp-96e22fb67bee5f700743.json",
+					"name" : "teleoperation_msg_ros2__cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 1,
+					"id" : "teleoperation_msg_ros2__py::@fbae6b02247f6c148d32",
+					"jsonFile" : "target-teleoperation_msg_ros2__py-a05706bcbfebfebb003d.json",
+					"name" : "teleoperation_msg_ros2__py",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__rosidl_generator_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__rosidl_generator_c-74a779cac047c2e74f17.json",
+					"name" : "teleoperation_msg_ros2__rosidl_generator_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__rosidl_generator_py::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__rosidl_generator_py-4df4982a600e5258689f.json",
+					"name" : "teleoperation_msg_ros2__rosidl_generator_py",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__rosidl_typesupport_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__rosidl_typesupport_c-ac5812c960158ad7817f.json",
+					"name" : "teleoperation_msg_ros2__rosidl_typesupport_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__rosidl_typesupport_c__pyext::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__rosidl_typesupport_c__pyext-4cc29a7dbf0274def6dd.json",
+					"name" : "teleoperation_msg_ros2__rosidl_typesupport_c__pyext",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__rosidl_typesupport_cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__rosidl_typesupport_cpp-57f01b02d0e0ca57bd26.json",
+					"name" : "teleoperation_msg_ros2__rosidl_typesupport_cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__rosidl_typesupport_fastrtps_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__rosidl_typesupport_fastrtps_c-bee6e1cc10b2114f9f29.json",
+					"name" : "teleoperation_msg_ros2__rosidl_typesupport_fastrtps_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__rosidl_typesupport_fastrtps_c__pyext::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__rosidl_typesupport_fastrtps_c__pyext-e91e2ec35f2b822552d9.json",
+					"name" : "teleoperation_msg_ros2__rosidl_typesupport_fastrtps_c__pyext",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__rosidl_typesupport_fastrtps_cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__rosidl_typesupport_fastrtps_cpp-e9e1d5fb944514957e2a.json",
+					"name" : "teleoperation_msg_ros2__rosidl_typesupport_fastrtps_cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__rosidl_typesupport_introspection_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__rosidl_typesupport_introspection_c-c3246afdbf21ba12dc2a.json",
+					"name" : "teleoperation_msg_ros2__rosidl_typesupport_introspection_c",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__rosidl_typesupport_introspection_c__pyext::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__rosidl_typesupport_introspection_c__pyext-4ddb684b1846c3d78bc7.json",
+					"name" : "teleoperation_msg_ros2__rosidl_typesupport_introspection_c__pyext",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2__rosidl_typesupport_introspection_cpp::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2__rosidl_typesupport_introspection_cpp-2b2f034b84153cc2932e.json",
+					"name" : "teleoperation_msg_ros2__rosidl_typesupport_introspection_cpp",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "teleoperation_msg_ros2_uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-teleoperation_msg_ros2_uninstall-1572edd5637ae493e887.json",
+					"name" : "teleoperation_msg_ros2_uninstall",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "uninstall::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-uninstall-3c0fd435a95350f3d6d0.json",
+					"name" : "uninstall",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "/home/eren/HIL-SERL/HIL-SERL-Project/serl_robot_infra/Galaxea_env/VR/ros2_ws/build/teleoperation_msg_ros2",
+		"source" : "/home/eren/HIL-SERL/HIL-SERL-Project/serl_robot_infra/Galaxea_env/VR/ros2_ws/src/teleoperation_msg_ros2"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 3
+	}
+}

@@ -1,0 +1,4 @@
+source;share/teleoperation_msg_ros2/local_setup.bash
+source;share/teleoperation_msg_ros2/local_setup.dsv
+source;share/teleoperation_msg_ros2/local_setup.sh
+source;share/teleoperation_msg_ros2/local_setup.zsh

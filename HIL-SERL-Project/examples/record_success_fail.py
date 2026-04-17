@@ -23,7 +23,8 @@ if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
 # 导入任务配置入口
-from examples.galaxea_task.usb_pick_insertion.config import env_config
+from examples.galaxea_task.usb_pick_insertion_single.config import env_config
+#from examples.galaxea_task.usb_pick_insertion.config import env_config
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string("exp_name", "galaxea_usb_insertion", "Name of experiment corresponding to folder.")

@@ -1,0 +1,7 @@
+{
+  "package_name": "teleoperation_msg_ros2",
+  "non_idl_tuples": [
+    "/home/eren/HIL-SERL/HIL-SERL-Project/serl_robot_infra/Galaxea_env/VR/ros2_ws/src/teleoperation_msg_ros2:msg/VrPose.msg",
+    "/home/eren/HIL-SERL/HIL-SERL-Project/serl_robot_infra/Galaxea_env/VR/ros2_ws/src/teleoperation_msg_ros2:srv/SwitchControlModeVR.srv"
+  ]
+}

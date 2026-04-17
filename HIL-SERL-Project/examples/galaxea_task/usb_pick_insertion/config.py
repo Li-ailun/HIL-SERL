@@ -164,8 +164,8 @@ class GalaxeaUSBEnvConfig:
     # ==============================
     # 6. 安全工作空间限位
     # ==============================
-    XYZ_LIMIT_LOW = np.array([0.1, -0.5, -0.1], dtype=np.float64)
-    XYZ_LIMIT_HIGH = np.array([0.7, 0.5, 0.5], dtype=np.float64)
+    XYZ_LIMIT_LOW = np.array([0.1, -0.5, -0.4], dtype=np.float64)
+    XYZ_LIMIT_HIGH = np.array([0.5, 0.5, 0.6], dtype=np.float64)
 
     RPY_LIMIT_LOW = np.array([-np.pi, -np.pi, -np.pi], dtype=np.float64)
     RPY_LIMIT_HIGH = np.array([np.pi, np.pi, np.pi], dtype=np.float64)
