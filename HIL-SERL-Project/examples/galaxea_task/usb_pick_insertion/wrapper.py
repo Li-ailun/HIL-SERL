@@ -60,7 +60,7 @@ class GalaxeaUSBEnv(GalaxeaDualArmEnv):
         self.script_control_enabled = enabled
         self.script_control_switch_time = time.time() if enabled else None
 
-    def _wait_until_script_control_ready(self, timeout: float = 15.0):
+    def _wait_until_script_control_ready(self, timeout: float = 30.0):  #等待切换mode的时间
         start = time.time()
         while not self.script_control_enabled:
             if time.time() - start > timeout:

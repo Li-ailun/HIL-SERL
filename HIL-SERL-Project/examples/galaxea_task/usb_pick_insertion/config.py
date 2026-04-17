@@ -113,7 +113,7 @@ class GalaxeaUSBEnvConfig:
     # ==============================
     HZ = 15
     DISPLAY_IMAGES = True
-    MAX_EPISODE_LENGTH = 10000
+    MAX_EPISODE_LENGTH = 500
 
     # ==============================
     # 3. 图像 / 显示配置
@@ -286,7 +286,11 @@ class GalaxeaUSBTrainConfig(DefaultTrainingConfig):
 
                 def reward_func(obs):
                     sigmoid = lambda x: 1 / (1 + jnp.exp(-x))
-                    return int(sigmoid(classifier_fn(obs)) > 0.7)
+                    prob = sigmoid(classifier_fn(obs))
+                    prob = np.asarray(jax.device_get(prob)).reshape(-1)[0]
+                    if prob > 0.5:
+                        print(f"[classifier-debug] prob={prob:.4f}")
+                    return int(prob > 0.7)
 
                 env = MultiCameraBinaryRewardClassifierWrapper(env, reward_func)
 
