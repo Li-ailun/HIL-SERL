@@ -12,11 +12,16 @@ DATA_DIR = BASE_DIR
 IMAGE_KEYS = ["left_wrist_rgb", "head_rgb", "right_wrist_rgb"]
 SHOW_SIZE = (256, 256)
 
+# success: prefix_200_success_images_2026-04-18_20-47-17.pkl
 SUCCESS_PATTERN = re.compile(
     r"^(?P<prefix>.+?)_(?P<count>\d+)_success_images_(?P<timestamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.pkl$"
 )
+
+# failure 兼容两种格式：
+# 1) prefix_failure_images_timestamp.pkl
+# 2) prefix_7810_failure_images_timestamp.pkl
 FAILURE_PATTERN = re.compile(
-    r"^(?P<prefix>.+?)_failure_images_(?P<timestamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.pkl$"
+    r"^(?P<prefix>.+?)(?:_(?P<count>\d+))?_failure_images_(?P<timestamp>\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})\.pkl$"
 )
 
 
@@ -41,11 +46,12 @@ def parse_file_info(path: str):
 
     m = FAILURE_PATTERN.match(filename)
     if m:
+        count = m.group("count")
         return {
             "kind": "failure",
             "prefix": m.group("prefix"),
             "timestamp": m.group("timestamp"),
-            "count": None,
+            "count": int(count) if count is not None else None,
             "path": path,
             "filename": filename,
         }
@@ -56,12 +62,12 @@ def parse_file_info(path: str):
 def build_groups():
     """
     把 success / failure 文件按 (prefix, timestamp) 配成一组。
-    例如：
-      galaxea_usb_insertion_failure_images_2026-04-13_20-26-33.pkl
-      galaxea_usb_insertion_200_success_images_2026-04-13_20-26-33.pkl
-    会归到同一组：
-      prefix = galaxea_usb_insertion
-      timestamp = 2026-04-13_20-26-33
+    兼容：
+      galaxea_usb_insertion_single_200_success_images_2026-04-18_20-47-17.pkl
+      galaxea_usb_insertion_single_7810_failure_images_2026-04-18_20-47-17.pkl
+
+    也兼容旧式 failure：
+      galaxea_usb_insertion_single_failure_images_2026-04-18_20-47-17.pkl
     """
     all_files = glob.glob(os.path.join(DATA_DIR, "*.pkl"))
     groups = {}
@@ -81,6 +87,7 @@ def build_groups():
                 "success_filename": None,
                 "failure_filename": None,
                 "success_count_tag": None,
+                "failure_count_tag": None,
             }
 
         if info["kind"] == "success":
@@ -90,8 +97,8 @@ def build_groups():
         else:
             groups[key]["failure_path"] = info["path"]
             groups[key]["failure_filename"] = info["filename"]
+            groups[key]["failure_count_tag"] = info["count"]
 
-    # 转成列表，并按 prefix + timestamp 排序
     group_list = list(groups.values())
     group_list.sort(key=lambda x: (x["prefix"], x["timestamp"]), reverse=True)
     return group_list
@@ -116,11 +123,12 @@ def extract_images(obs_or_transition):
     frames = []
     for key in IMAGE_KEYS:
         if key not in img_dict:
+            blank = np.zeros((SHOW_SIZE[1], SHOW_SIZE[0], 3), dtype=np.uint8)
+            frames.append(blank)
             continue
 
         img = np.asarray(img_dict[key])
 
-        # 如果有时间维 / chunk 维，取最后一帧
         while img.ndim > 3:
             img = img[-1]
 
@@ -168,7 +176,7 @@ def load_group_data(group_info):
 def main():
     groups = build_groups()
     if not groups:
-        raise FileNotFoundError("classifier_data 目录下没有找到可配对的 success/failure pkl 文件。")
+        raise FileNotFoundError("classifier_data_single 目录下没有找到可配对的 success/failure pkl 文件。")
 
     print("找到的数据组：")
     for i, g in enumerate(groups):
@@ -225,28 +233,22 @@ def main():
 
         if key == 27:  # ESC
             break
-
         elif key == ord("d"):
             index += 1
-
         elif key == ord("a"):
             index -= 1
-
         elif key == ord("s"):
             mode = "success"
             index = 0
-
         elif key == ord("f"):
             mode = "failure"
             index = 0
-
         elif key == ord("q"):
             group_idx = (group_idx - 1) % len(groups)
             group_info = groups[group_idx]
             success_data, failure_data = load_group_data(group_info)
             mode = "success" if len(success_data) > 0 else "failure"
             index = 0
-
         elif key == ord("e"):
             group_idx = (group_idx + 1) % len(groups)
             group_info = groups[group_idx]

@@ -118,11 +118,11 @@ class GalaxeaUSBEnvConfig:
     # 说明：
     # 统一 env 在 single 模式下优先读取 RESET_POSE
     # ==============================
-    RESET_POSE = np.array([0.2, -0.25, -0.3, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    RESET_POSE = np.array([0.41774907445156195, -0.25200100000000003, 0.012723447389100126, 7.697375045982823e-05,-0.7235532515928197, -7.34328254905007e-05, 0.6902685570067056], dtype=np.float32)
 
     # 为兼容旧逻辑，保留双臂字段也无妨
     RESET_L = np.array([0.2, 0.25, -0.3, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
-    RESET_R = np.array([0.2, 0.25, -0.3, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
+    RESET_R = np.array([0.41774907445156195, -0.25200100000000003, 0.012723447389100126, 7.697375045982823e-05,-0.7235532515928197, -7.34328254905007e-05, 0.6902685570067056], dtype=np.float32)
 
     RANDOM_RESET = True
     RANDOM_XY_RANGE = 0.01
@@ -132,7 +132,7 @@ class GalaxeaUSBEnvConfig:
     # ==============================
     HZ = 15
     DISPLAY_IMAGES = True
-    MAX_EPISODE_LENGTH = 500
+    MAX_EPISODE_LENGTH = 1500
 
     # ==============================
     # 3. 图像 / 显示配置

@@ -71,7 +71,7 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_integer(
     "max_episode_steps",
-    300,
+    650,
     "Maximum number of steps per demo episode before forcing truncation.",
 )
 
