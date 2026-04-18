@@ -165,7 +165,7 @@ class GalaxeaUSBEnvConfig:
     }
 
     HEAD_CAMERA = {
-        "device_index": 14,   #v4l2-ctl --list-devices查询
+        "device_index": 2,   #v4l2-ctl --list-devices查询
         "api": cv2.CAP_V4L2,
         "fourcc": "MJPG",
         "frame_width": 1344,
@@ -303,7 +303,7 @@ class GalaxeaUSBTrainConfig(DefaultTrainingConfig):
                     sample=env.observation_space.sample(),
                     image_keys=self.classifier_keys,
                     ##若需要奖励，在如下目录下搜索奖励分类器ckpt
-                    checkpoint_path=os.path.abspath("classifier_ckpt/"),
+                    checkpoint_path=os.path.abspath("classifier_ckpt_single/"),
                 )
 
                 def reward_func(obs):

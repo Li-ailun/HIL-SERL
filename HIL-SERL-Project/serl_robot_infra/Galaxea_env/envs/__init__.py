@@ -1,5 +1,5 @@
-from .dual_galaxea_env import GalaxeaDualArmEnv
+from .galaxea_arm_env import GalaxeaArmEnv
 
 __all__ = [
-    "GalaxeaDualArmEnv",
+    "GalaxeaArmEnv",
 ]

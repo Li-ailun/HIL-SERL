@@ -31,7 +31,9 @@
 # python record_demos.py --successes_needed=2 --max_episode_steps=200
 
 
-#保留全部帧，bc过滤静止帧再训练
+#过滤静止帧再保存demos（ros2 topic echo /motion_control/pose_ee_arm_right可以确认vr暂停后数值不会变化，所以可以视为静止帧 ）
+#（可以回放录制的demos，看看动作是不是流畅的）
+
 import os
 import sys
 from tqdm import tqdm
@@ -98,7 +100,8 @@ def main(_):
     env = env_config.get_environment(
         fake_env=False,
         save_video=False,
-        classifier=False,
+        #但是本机环境无法成功加载classiferckpt，所以还是使用最大步长作为一个demo的结束
+        classifier=False,#True,  #应该主动打开奖励分类器，最大步长设置为最低底线，不能当最优先的demos判定基准
     )
 
     obs, info = env.reset()
@@ -149,7 +152,12 @@ def main(_):
                 infos=info,
             )
         )
-        trajectory.append(transition)
+
+        is_static = np.allclose(actions, 0.0, atol=1e-8)
+
+        #只保留真正有动作的帧，去掉静止帧，回放demos确定数据是纯净的
+        if not is_static:
+            trajectory.append(transition)
 
         pbar.set_description(
             f"成功 Demo 数: {success_count}/{success_needed} | "
@@ -178,15 +186,17 @@ def main(_):
                     trajectory[-1]["rewards"] = float(info["succeed"])
 
             # 官方逻辑：只要这个回合 succeed，就把整条轨迹全存下来
-            if info.get("succeed", False):
+            if info.get("succeed", False) and len(trajectory)> 0:
                 for trans in trajectory:
                     transitions.append(copy.deepcopy(trans))
                 success_count += 1
                 pbar.update(1)
                 print(f"🎉 成功录制 1 条 Demo！当前累计成功条数: {success_count}")
+                print(f"🎉 剔除静止帧后，纯净序列长度: {len(trajectory)}")
+
                 print(f"📦 本条轨迹长度: {len(trajectory)}")
             else:
-                print("❌ 当前回合失败，已丢弃该轨迹。")
+                print("❌ 当前回合失败，或没有有效操作帧，已丢弃该轨迹。")
 
             # 清空当前回合缓存
             trajectory = []

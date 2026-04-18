@@ -135,3 +135,13 @@ actor 才会开始生成新的在线数据，写进：
 
 buffer/
 learner 侧对应的 replay_buffer
+
+
+11, 把多阶段 classifier 列入 roadmap。 官方 USB walkthrough 明确支持多阶段，你现在可以先把接口铺好
+classifier_stages = [
+    {"name": "pickup", "image_keys": [...]},
+    {"name": "align", "image_keys": [...]},
+]
+
+
+12,补 preflight check 和 3 个 smoke tests。 这会直接减少你最近反复出现的单/双臂维度和路径错误。
