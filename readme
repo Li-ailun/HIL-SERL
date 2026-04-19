@@ -154,3 +154,24 @@ rsync -avz -e "ssh -p 2122" classifier_data_single \
 lixiang@service.qich.top:/home/hddData/User/lixiang/hilserl_workspace/HIL-SERL-Project/examples/
 
 
+14,目前本地运行后，actor判定一次reward=0.9以上后，会把这段数据发给learner，忽略报错，只是传输的慢而已，七分钟左右后learner开始x/1000000,
+即learner接受actor的数据后开始训练
+训练到成功保存checkpoint_y 后，例如checkpoint_14000，那么本地即actor记录的12000以前的buffer和demo_buffer可以删去。
+保留1200-1400的buffer和demo_buffe即可，为了方便后续learner可以读取replay_buffer,
+之前的删去是因为buffer和demo_buffe主要起回顾作用，回顾最新的即可
+
+learner：
+如果learner保存的checkpoints_y没问题，那么下次重新启动learner后，会先读取y，然后从0/（1000000-（y+1））继续训练。
+如果读取checkpoints_y失败（权重文件有问题，不可用等），那么learner继续从0/1000000开始。
+然后learener正式训练前等待读取的Filling up replay buffer是读取actor即本地保存的budder
+所以本地保留一些buffer和demo_buffer更方便，buffer保证让learner更快度过Fillin，g up replay buffer，demo_buffer让learner拥有更多一些的数据
+
+actor：
+判定为给奖励后，会把数据发给learner，如果learner收到了，会开始复位，继续下一个任务执行
+actor和learner类似，但不从ckpt读取（ckpt在服务器上，专门给learner读取），actor从buffer的最新transitions开始读取，所以buffer不要删除最新的几个
+actor的buffer无所谓，训练完成一环节的基准是learner：z/z 训练完毕，actor只是提供数据而已
+
+输出分析：reward=0.9以上后会复位？
+感觉训练效果不好，是否路的数据有问题？
+
+

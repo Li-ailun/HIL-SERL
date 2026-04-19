@@ -152,6 +152,7 @@
 # timeout_ms=10000/20000，
 # 其余不用再向官方对齐。
 
+
 import os
 import sys
 import glob
@@ -259,7 +260,6 @@ if PROJECT_ROOT not in sys.path:
 # ==============================================================
 # 任务配置
 # ==============================================================
-#from examples.galaxea_task.usb_pick_insertion.config import env_config
 from examples.galaxea_task.usb_pick_insertion_single.config import env_config
 
 FLAGS = flags.FLAGS
@@ -296,6 +296,72 @@ def print_green(x):
 
 def print_yellow(x):
     print("\033[93m {}\033[00m".format(x))
+
+def _block_until_ready_tree(tree):
+    """
+    递归等待 pytree 里的设备数组 ready。
+    避免在 publish/save 时隐式触发大规模异步同步。
+    """
+    def _block(x):
+        if hasattr(x, "block_until_ready"):
+            x.block_until_ready()
+        return x
+
+    return jax.tree_util.tree_map(_block, tree)
+
+
+def _to_host_pytree(tree):
+    """
+    把 pytree 中的 jax/sharded 数组安全转成 host numpy。
+    这是修复 PositionalSharding 转换 warning / 卡死的关键。
+    """
+    def _convert(x):
+        if isinstance(x, (jax.Array, jnp.ndarray)):
+            return np.asarray(jax.device_get(x))
+        return x
+
+    return jax.tree_util.tree_map(_convert, tree)
+
+
+def _to_loggable_pytree(tree):
+    """
+    给 wandb / 普通日志用：
+    标量转 python scalar，非标量转 numpy。
+    """
+    def _convert(x):
+        if isinstance(x, (jax.Array, jnp.ndarray)):
+            x = np.asarray(jax.device_get(x))
+            if x.shape == ():
+                return x.item()
+            return x
+        return x
+
+    return jax.tree_util.tree_map(_convert, tree)
+
+
+def _publish_network_to_actor(server, params):
+    """
+    先把分片 params 拉回 host，再发给 actor。
+    避免 server.publish_network 里触发 PositionalSharding 转换问题。
+    """
+    params = _block_until_ready_tree(params)
+    params = _to_host_pytree(params)
+    server.publish_network(params)
+
+
+def _save_checkpoint_host(checkpoint_path, state, step, keep=100):
+    """
+    保存前先把分片 state 拉回 host numpy，再写 checkpoint。
+    这是修复 2000 step 左右卡住/断开的关键。
+    """
+    state = _block_until_ready_tree(state)
+    state = _to_host_pytree(state)
+    checkpoints.save_checkpoint(
+        os.path.abspath(checkpoint_path),
+        state,
+        step=step,
+        keep=keep,
+    )
 
 
 # ==============================================================
@@ -450,6 +516,7 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
 
     def update_params(params):
         nonlocal agent
+        params = jax.tree_util.tree_map(jnp.array, params)
         agent = agent.replace(state=agent.state.replace(params=params))
 
     client.recv_network_callback(update_params)
@@ -483,14 +550,6 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
 
         with timer.context("step_env"):
             next_obs, reward, done, truncated, info = env.step(actions)
-
-            print(
-                f"[reward-debug] step={step}, "
-                f"reward={reward}, done={done}, truncated={truncated}, "
-                f"succeed={info.get('succeed', None)}, "
-                f"grasp_penalty={info.get('grasp_penalty', None)}, "
-                f"info_keys={list(info.keys())}"
-            )
 
             if "left" in info:
                 info.pop("left")
@@ -632,7 +691,7 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger, config):
     # 【关键修复】
     # 先发初始网络，避免 actor 一启动就因为拿不到参数而等待或崩溃。
     # ---------------------------------------------------------
-    server.publish_network(agent.state.params)
+    _publish_network_to_actor(server, agent.state.params)
     print_green("sent initial network to actor")
 
     pbar = tqdm.tqdm(
@@ -651,7 +710,7 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger, config):
     # 补发一次当前网络：
     # 早发一次用于避免 actor 启动时拿不到参数，
     # 这里再发一次用于和官方“buffer 填满后发网络”的时机对齐。
-    server.publish_network(agent.state.params)
+    _publish_network_to_actor(server, agent.state.params)
     print_green("resent initial network to actor after replay buffer warmup")
 
     replay_iterator = replay_buffer.get_iterator(
@@ -701,21 +760,20 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger, config):
             )
 
         if step > 0 and step % config.steps_per_update == 0:
-            agent = jax.block_until_ready(agent)
-            server.publish_network(agent.state.params)
+           _publish_network_to_actor(server, agent.state.params)
 
         if step % config.log_period == 0 and wandb_logger:
-            wandb_logger.log(update_info, step=step)
+            wandb_logger.log(_to_loggable_pytree(update_info), step=step)
             wandb_logger.log({"timer": timer.get_average_times()}, step=step)
 
         if step > 0 and config.checkpoint_period and step % config.checkpoint_period == 0:
-            os.makedirs(FLAGS.checkpoint_path, exist_ok=True)
-            checkpoints.save_checkpoint(
-                os.path.abspath(FLAGS.checkpoint_path),
+           os.makedirs(FLAGS.checkpoint_path, exist_ok=True)
+           _save_checkpoint_host(
+                FLAGS.checkpoint_path,
                 agent.state,
                 step=step,
                 keep=100,
-            )
+           )
 
 
 # ==============================================================
@@ -815,8 +873,18 @@ def main(_):
         ckpt = checkpoints.restore_checkpoint(
             os.path.abspath(FLAGS.checkpoint_path),
             agent.state,
-        )
+        )  
+
+        if FLAGS.learner:
+            ckpt = jax.device_put(
+                jax.tree_util.tree_map(jnp.array, ckpt),
+                sharding.replicate(),
+    )
+        else:
+            ckpt = jax.tree_util.tree_map(jnp.array, ckpt)
+
         agent = agent.replace(state=ckpt)
+
         latest_ckpt = checkpoints.latest_checkpoint(os.path.abspath(FLAGS.checkpoint_path))
         if latest_ckpt:
             ckpt_number = os.path.basename(latest_ckpt)[11:]
@@ -927,6 +995,783 @@ def main(_):
 
 if __name__ == "__main__":
     app.run(main)
+
+
+# import os
+# import sys
+# import glob
+# import time
+# import copy
+# import pickle as pkl
+
+# # ==============================================================
+# # 【合并前差异说明】
+# # --------------------------------------------------------------
+# # 版本 A（你用于让 learner 跑起来的版本）主要修复了：
+# # 1) Learner 启动时 latest_checkpoint(None) 的判空问题。
+# # 2) Learner 的 RPC server 明确起线程、打印状态、便于调试。
+# # 3) Learner 先 publish 初始网络，再等待 online replay buffer，
+# #    避免 Actor/Learner 互相等待的“死锁”。
+# #
+# # 版本 B（你用于让 actor 跑起来的版本）主要修复了：
+# # 1) Actor 模式下在 import jax 前强制 CPU，避免本地 GPU/JAX 初始化崩溃。
+# # 2) Actor 不做多卡 replicate，只做单机推理。
+# # 3) Actor 先用 demo 推断网络结构，再创建真实环境，
+# #    避免真实机器人/相机/VR 环境过早启动导致问题。
+# # 4) Actor 的 TrainerClient timeout 加大，适应 SSH 隧道与 learner 首次编译。
+# #
+# # 【本合并版原则】
+# # --------------------------------------------------------------
+# # 1) Learner 分支：保留版本 A 的核心修复。
+# # 2) Actor 分支：保留版本 B 的核心修复。
+# # 3) 共同部分：保留你已经验证能工作的结构，尽量不再做额外“理论优化”。
+# # 4) 保持整体结构仍然贴近官方 train_rlpd.py，只对你当前场景必要处做修改。
+# # ==============================================================
+
+
+# def _should_force_cpu_for_actor() -> bool:
+#     """
+#     【来源：Actor 可运行版】
+#     在 absl flags 真正解析前，直接检查原始 argv，判断当前是否是 actor 模式。
+
+#     目的：
+#     - 你的本地笔记本在 actor 模式下，JAX+GPU 初始化不稳定；
+#     - 因此 actor 强制走 CPU 推理，learner 继续在服务器走 GPU 训练；
+#     - 注意：这一段必须写在 import jax 之前，否则环境变量不会生效。
+#     """
+#     argv = [arg.lower() for arg in sys.argv[1:]]
+#     for arg in argv:
+#         if arg == "--actor":
+#             return True
+#         if arg.startswith("--actor="):
+#             value = arg.split("=", 1)[1]
+#             if value in ("true", "1", "yes", "y", "t"):
+#                 return True
+#     return False
+
+
+# # ==============================================================
+# # 【合并后保留：Actor 预先强制 CPU】
+# # --------------------------------------------------------------
+# # 只在 actor 模式时生效。
+# # learner 端仍会正常使用服务器 GPU。
+# # ==============================================================
+# if _should_force_cpu_for_actor():
+#     os.environ["JAX_PLATFORMS"] = "cpu"
+#     os.environ["CUDA_VISIBLE_DEVICES"] = ""
+#     os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+
+# import jax
+# import jax.numpy as jnp
+# import numpy as np
+# import tqdm
+# from absl import app, flags
+# from flax.training import checkpoints
+# from gymnasium import spaces
+# from gymnasium.wrappers.record_episode_statistics import RecordEpisodeStatistics
+# from natsort import natsorted
+
+# # ==============================================================
+# # SERL 强化学习算法核心组件
+# # ==============================================================
+# from serl_launcher.agents.continuous.sac import SACAgent
+# from serl_launcher.agents.continuous.sac_hybrid_single import SACAgentHybridSingleArm
+# from serl_launcher.agents.continuous.sac_hybrid_dual import SACAgentHybridDualArm
+# from serl_launcher.utils.timer_utils import Timer
+# from serl_launcher.utils.train_utils import concat_batches
+# from serl_launcher.utils.launcher import (
+#     make_sac_pixel_agent,
+#     make_sac_pixel_agent_hybrid_single_arm,
+#     make_sac_pixel_agent_hybrid_dual_arm,
+#     make_trainer_config,
+#     make_wandb_logger,
+# )
+# from serl_launcher.data.data_store import MemoryEfficientReplayBufferDataStore
+
+# # ==============================================================
+# # AgentLace RPC 通信框架
+# # ==============================================================
+# from agentlace.trainer import TrainerServer, TrainerClient
+# from agentlace.data.data_store import QueuedDataStore
+
+# # ==============================================================
+# # 路径配置
+# # ==============================================================
+# PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+# if PROJECT_ROOT not in sys.path:
+#     sys.path.append(PROJECT_ROOT)
+
+# # ==============================================================
+# # 任务配置
+# # ==============================================================
+# #from examples.galaxea_task.usb_pick_insertion.config import env_config
+# from examples.galaxea_task.usb_pick_insertion_single.config import env_config
+
+# FLAGS = flags.FLAGS
+
+# flags.DEFINE_string("exp_name", "galaxea_usb_insertion", "Experiment name.")
+# flags.DEFINE_integer("seed", 42, "Random seed.")
+
+# flags.DEFINE_boolean("learner", False, "Whether this process is the learner.")
+# flags.DEFINE_boolean("actor", False, "Whether this process is the actor.")
+# flags.DEFINE_string("ip", "localhost", "IP address of the learner.")
+
+# flags.DEFINE_multi_string("demo_path", None, "Path(s) to demo data for learner bootstrap.")
+# flags.DEFINE_string("checkpoint_path", "./rlpd_checkpoints", "Path to save checkpoints / buffers.")
+
+# flags.DEFINE_integer("eval_checkpoint_step", 0, "Step to evaluate the checkpoint.")
+# flags.DEFINE_integer("eval_n_trajs", 0, "Number of trajectories to evaluate.")
+# flags.DEFINE_boolean("save_video", False, "Save evaluation videos.")
+# flags.DEFINE_boolean("debug", False, "Debug mode, disable wandb upload.")
+
+# # ==============================================================
+# # 【说明】
+# # --------------------------------------------------------------
+# # 这里暂时继续保留 PositionalSharding，是为了先保持你当前能跑通的行为。
+# # 后续如果要进一步和新版 JAX 靠齐，可以整体迁移到 NamedSharding。
+# # ==============================================================
+# devices = jax.local_devices()
+# num_devices = len(devices)
+# sharding = jax.sharding.PositionalSharding(devices)
+
+
+# def print_green(x):
+#     print("\033[92m {}\033[00m".format(x))
+
+
+# def print_yellow(x):
+#     print("\033[93m {}\033[00m".format(x))
+
+
+# # ==============================================================
+# # Learner / Actor 共用辅助：从 demo 推断空间与网络样本
+# # --------------------------------------------------------------
+# # 【合并后保留】
+# # 你当前的 learner 与 actor 都已验证：从 demo 推断 obs/action 结构更稳。
+# # ==============================================================
+# def infer_space_from_value(x):
+#     if isinstance(x, dict):
+#         return spaces.Dict({k: infer_space_from_value(v) for k, v in x.items()})
+
+#     arr = np.asarray(x)
+
+#     if arr.dtype == np.uint8:
+#         return spaces.Box(low=0, high=255, shape=arr.shape, dtype=np.uint8)
+#     elif np.issubdtype(arr.dtype, np.bool_):
+#         return spaces.Box(low=0, high=1, shape=arr.shape, dtype=np.bool_)
+#     elif np.issubdtype(arr.dtype, np.integer):
+#         return spaces.Box(
+#             low=np.iinfo(arr.dtype).min,
+#             high=np.iinfo(arr.dtype).max,
+#             shape=arr.shape,
+#             dtype=arr.dtype,
+#         )
+#     else:
+#         return spaces.Box(low=-np.inf, high=np.inf, shape=arr.shape, dtype=arr.dtype)
+
+
+# def resolve_demo_paths(paths):
+#     resolved = []
+#     for p in paths:
+#         if os.path.isdir(p):
+#             resolved.extend(glob.glob(os.path.join(p, "*.pkl")))
+#         else:
+#             resolved.extend(glob.glob(p))
+#     resolved = [p for p in resolved if p.endswith(".pkl")]
+#     assert len(resolved) > 0, "❌ 没有找到任何 demo .pkl 文件。"
+#     return resolved
+
+
+# def get_first_valid_transition(paths):
+#     for path in paths:
+#         with open(path, "rb") as f:
+#             transitions = pkl.load(f)
+
+#         for transition in transitions:
+#             if "actions" in transition and "observations" in transition:
+#                 return transition
+
+#     raise ValueError("❌ 无法从 demo_path 中找到有效 transition。")
+
+
+# def build_spaces_and_samples_from_demos(paths):
+#     sample_transition = get_first_valid_transition(paths)
+#     observation_space = infer_space_from_value(sample_transition["observations"])
+#     action_space = infer_space_from_value(sample_transition["actions"])
+#     sample_obs = sample_transition["observations"]
+#     sample_action = np.asarray(sample_transition["actions"])
+#     return observation_space, action_space, sample_obs, sample_action
+
+
+# # ==============================================================
+# # Actor 逻辑
+# # --------------------------------------------------------------
+# # 【合并后说明】
+# # 1) 保留官方结构：eval / train 两种模式。
+# # 2) 保留你当前能工作的训练采集逻辑。
+# # 3) 保留更稳的 timeout_ms=10000。
+# # 4) wait_for_server 这里采用 True：
+# #    - learner 已经改为“先起服务、先发初始网络”；
+# #    - 因此不会再像之前那样死锁；
+# #    - 同时 actor 在 learner 还没完全 ready 时也不会立即崩掉。
+# # ==============================================================
+# def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
+#     # ---------------------------------------------------------
+#     # 纯评估模式
+#     # ---------------------------------------------------------
+#     if FLAGS.eval_checkpoint_step:
+#         success_counter = 0
+#         time_list = []
+
+#         ckpt = checkpoints.restore_checkpoint(
+#             os.path.abspath(FLAGS.checkpoint_path),
+#             agent.state,
+#             step=FLAGS.eval_checkpoint_step,
+#         )
+#         agent = agent.replace(state=ckpt)
+
+#         for episode in range(FLAGS.eval_n_trajs):
+#             obs, _ = env.reset()
+#             done = False
+#             start_time = time.time()
+
+#             while not done:
+#                 sampling_rng, key = jax.random.split(sampling_rng)
+#                 actions = agent.sample_actions(
+#                     observations=jax.device_put(obs),
+#                     argmax=False,
+#                     seed=key,
+#                 )
+#                 actions = np.asarray(jax.device_get(actions))
+
+#                 next_obs, reward, done, truncated, info = env.step(actions)
+#                 obs = next_obs
+
+#                 # 【合并后保留：奖励调试打印】
+#                 # 方便你后续观察 reward classifier 是否触发成功。
+#                 if reward or done or truncated:
+#                     print(f"[reward-debug] reward={reward}, done={done}, truncated={truncated}")
+
+#                 if done:
+#                     if reward:
+#                         dt = time.time() - start_time
+#                         time_list.append(dt)
+#                         print_green(f"✅ 第 {episode + 1} 回合成功！耗时: {dt:.2f}s")
+#                     else:
+#                         print_yellow(f"❌ 第 {episode + 1} 回合失败。")
+
+#                     success_counter += reward
+#                     print(f"📊 当前成绩: {success_counter}/{episode + 1}")
+
+#         print_green(f"🏆 success rate: {success_counter / FLAGS.eval_n_trajs:.2%}")
+#         if time_list:
+#             print_green(f"⏱️ average time: {np.mean(time_list):.2f}s")
+#         return
+
+#     # ---------------------------------------------------------
+#     # 训练采集模式
+#     # ---------------------------------------------------------
+#     start_step = (
+#         int(os.path.basename(natsorted(glob.glob(os.path.join(FLAGS.checkpoint_path, "buffer/*.pkl")))[-1])[12:-4]) + 1
+#         if FLAGS.checkpoint_path
+#         and os.path.exists(os.path.join(FLAGS.checkpoint_path, "buffer"))
+#         and glob.glob(os.path.join(FLAGS.checkpoint_path, "buffer/*.pkl"))
+#         else 0
+#     )
+
+#     datastore_dict = {
+#         "actor_env": data_store,
+#         "actor_env_intvn": intvn_data_store,
+#     }
+
+#     client = TrainerClient(
+#         "actor_env",
+#         FLAGS.ip,
+#         make_trainer_config(),
+#         data_stores=datastore_dict,
+#         wait_for_server=True,     # 合并决策：更稳，避免 learner 稍慢就直接崩
+#         timeout_ms=10000,         # 合并决策：保留更长超时，适应 SSH 隧道与首次编译
+#     )
+
+#     def update_params(params):
+#         nonlocal agent
+#         agent = agent.replace(state=agent.state.replace(params=params))
+
+#     client.recv_network_callback(update_params)
+
+#     transitions = []
+#     demo_transitions = []
+
+#     obs, _ = env.reset()
+
+#     timer = Timer()
+#     running_return = 0.0
+#     already_intervened = False
+#     intervention_count = 0
+#     intervention_steps = 0
+
+#     pbar = tqdm.tqdm(range(start_step, config.max_steps), dynamic_ncols=True, desc="actor")
+#     for step in pbar:
+#         timer.tick("total")
+
+#         with timer.context("sample_actions"):
+#             if step < config.random_steps:
+#                 actions = env.action_space.sample()
+#             else:
+#                 sampling_rng, key = jax.random.split(sampling_rng)
+#                 actions = agent.sample_actions(
+#                     observations=jax.device_put(obs),
+#                     seed=key,
+#                     argmax=False,
+#                 )
+#                 actions = np.asarray(jax.device_get(actions))
+
+#         with timer.context("step_env"):
+#             next_obs, reward, done, truncated, info = env.step(actions)
+
+#             print(
+#                 f"[reward-debug] step={step}, "
+#                 f"reward={reward}, done={done}, truncated={truncated}, "
+#                 f"succeed={info.get('succeed', None)}, "
+#                 f"grasp_penalty={info.get('grasp_penalty', None)}, "
+#                 f"info_keys={list(info.keys())}"
+#             )
+
+#             if "left" in info:
+#                 info.pop("left")
+#             if "right" in info:
+#                 info.pop("right")
+
+#             # -------------------------------------------------
+#             # 官方人类干预逻辑：
+#             # 如果环境返回 intervene_action，说明当前由 VR/人工接管。
+#             # -------------------------------------------------
+#             if "intervene_action" in info:
+#                 actions = info.pop("intervene_action")
+#                 intervention_steps += 1
+#                 if not already_intervened:
+#                     intervention_count += 1
+#                 already_intervened = True
+#             else:
+#                 already_intervened = False
+
+#             running_return += reward
+#             transition = dict(
+#                 observations=obs,
+#                 actions=actions,
+#                 next_observations=next_obs,
+#                 rewards=reward,
+#                 masks=1.0 - done,
+#                 dones=done,
+#             )
+#             if "grasp_penalty" in info:
+#                 transition["grasp_penalty"] = info["grasp_penalty"]
+
+#             # 无论是策略动作还是人类动作，都会放进 online data store
+#             data_store.insert(transition)
+#             transitions.append(copy.deepcopy(transition))
+
+#             # 只有当出现干预时，才额外放进 intervention/demo data store
+#             if already_intervened:
+#                 intvn_data_store.insert(transition)
+#                 demo_transitions.append(copy.deepcopy(transition))
+
+#             obs = next_obs
+
+#             if done or truncated:
+#                 if "episode" not in info:
+#                     info["episode"] = {}
+#                 info["episode"]["intervention_count"] = intervention_count
+#                 info["episode"]["intervention_steps"] = intervention_steps
+
+#                 stats = {"environment": info}
+#                 client.request("send-stats", stats)
+
+#                 pbar.set_description(f"last return: {running_return}")
+#                 running_return = 0.0
+#                 intervention_count = 0
+#                 intervention_steps = 0
+#                 already_intervened = False
+
+#                 # -------------------------------------------------
+#                 # 【保留官方逻辑】
+#                 # 仍然在 episode 结束时上传 datastore。
+#                 # 你当前已经依赖 episode 结束来触发在线数据同步。
+#                 # -------------------------------------------------
+#                 client.update()
+#                 obs, _ = env.reset()
+
+#         # -----------------------------------------------------
+#         # 周期性把本地缓存写盘，便于断点恢复与分析。
+#         # -----------------------------------------------------
+#         if step > 0 and config.buffer_period > 0 and step % config.buffer_period == 0:
+#             buffer_path = os.path.join(FLAGS.checkpoint_path, "buffer")
+#             demo_buffer_path = os.path.join(FLAGS.checkpoint_path, "demo_buffer")
+#             os.makedirs(buffer_path, exist_ok=True)
+#             os.makedirs(demo_buffer_path, exist_ok=True)
+
+#             with open(os.path.join(buffer_path, f"transitions_{step}.pkl"), "wb") as f:
+#                 pkl.dump(transitions, f)
+#                 transitions = []
+
+#             with open(os.path.join(demo_buffer_path, f"transitions_{step}.pkl"), "wb") as f:
+#                 pkl.dump(demo_transitions, f)
+#                 demo_transitions = []
+
+#         timer.tock("total")
+
+#         if step % config.log_period == 0:
+#             stats = {"timer": timer.get_average_times()}
+#             client.request("send-stats", stats)
+
+
+# # ==============================================================
+# # Learner 逻辑
+# # --------------------------------------------------------------
+# # 【合并后说明】
+# # 1) 保留版本 A 的 latest_checkpoint 判空修复。
+# # 2) 保留版本 A 的显式 server 线程包装与调试打印。
+# # 3) 保留“先 publish 初始网络，再等待 replay buffer”的修复。
+# # ==============================================================
+# def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger, config):
+#     latest_ckpt = None
+#     if FLAGS.checkpoint_path and os.path.exists(FLAGS.checkpoint_path):
+#         latest_ckpt = checkpoints.latest_checkpoint(os.path.abspath(FLAGS.checkpoint_path))
+
+#     if latest_ckpt is None:
+#         start_step = 0
+#     else:
+#         start_step = int(os.path.basename(latest_ckpt)[11:]) + 1
+
+#     step = start_step
+
+#     def stats_callback(req_type: str, payload: dict) -> dict:
+#         assert req_type == "send-stats", f"Invalid request type: {req_type}"
+#         if wandb_logger is not None:
+#             wandb_logger.log(payload, step=step)
+#         return {}
+
+#     import threading
+#     import traceback
+
+#     server = TrainerServer(make_trainer_config(), request_callback=stats_callback)
+#     server.register_data_store("actor_env", replay_buffer)
+#     server.register_data_store("actor_env_intvn", demo_buffer)
+
+#     def _run_server():
+#         try:
+#             print_green(f"starting req_rep_server on port {make_trainer_config().port_number}")
+#             server.req_rep_server.run()
+#         except Exception as e:
+#             print_yellow(f"REQ/REP server crashed: {e!r}")
+#             traceback.print_exc()
+#             raise
+
+#     server.thread = threading.Thread(target=_run_server, daemon=True)
+#     server.thread.start()
+
+#     time.sleep(1)
+#     print_green(f"server thread alive: {server.thread.is_alive()}")
+
+#     # ---------------------------------------------------------
+#     # 【关键修复】
+#     # 先发初始网络，避免 actor 一启动就因为拿不到参数而等待或崩溃。
+#     # ---------------------------------------------------------
+#     server.publish_network(agent.state.params)
+#     print_green("sent initial network to actor")
+
+#     pbar = tqdm.tqdm(
+#         total=config.training_starts,
+#         initial=len(replay_buffer),
+#         desc="Filling up replay buffer",
+#         position=0,
+#         leave=True,
+#     )
+#     while len(replay_buffer) < config.training_starts:
+#         pbar.update(len(replay_buffer) - pbar.n)
+#         time.sleep(1)
+#     pbar.update(len(replay_buffer) - pbar.n)
+#     pbar.close()
+
+#     # 补发一次当前网络：
+#     # 早发一次用于避免 actor 启动时拿不到参数，
+#     # 这里再发一次用于和官方“buffer 填满后发网络”的时机对齐。
+#     server.publish_network(agent.state.params)
+#     print_green("resent initial network to actor after replay buffer warmup")
+
+#     replay_iterator = replay_buffer.get_iterator(
+#         sample_args={
+#             "batch_size": config.batch_size // 2,
+#             "pack_obs_and_next_obs": True,
+#         },
+#         device=sharding.replicate(),
+#     )
+#     demo_iterator = demo_buffer.get_iterator(
+#         sample_args={
+#             "batch_size": config.batch_size // 2,
+#             "pack_obs_and_next_obs": True,
+#         },
+#         device=sharding.replicate(),
+#     )
+
+#     timer = Timer()
+
+#     if isinstance(agent, SACAgent):
+#         train_critic_networks_to_update = frozenset({"critic"})
+#         train_networks_to_update = frozenset({"critic", "actor", "temperature"})
+#     else:
+#         train_critic_networks_to_update = frozenset({"critic", "grasp_critic"})
+#         train_networks_to_update = frozenset({"critic", "grasp_critic", "actor", "temperature"})
+
+#     for step in tqdm.tqdm(range(start_step, config.max_steps), dynamic_ncols=True, desc="learner"):
+#         for _ in range(config.cta_ratio - 1):
+#             with timer.context("sample_replay_buffer"):
+#                 batch = next(replay_iterator)
+#                 demo_batch = next(demo_iterator)
+#                 batch = concat_batches(batch, demo_batch, axis=0)
+
+#             with timer.context("train_critics"):
+#                 agent, _ = agent.update(
+#                     batch,
+#                     networks_to_update=train_critic_networks_to_update,
+#                 )
+
+#         with timer.context("train"):
+#             batch = next(replay_iterator)
+#             demo_batch = next(demo_iterator)
+#             batch = concat_batches(batch, demo_batch, axis=0)
+#             agent, update_info = agent.update(
+#                 batch,
+#                 networks_to_update=train_networks_to_update,
+#             )
+
+#         if step > 0 and step % config.steps_per_update == 0:
+#             agent = jax.block_until_ready(agent)
+#             server.publish_network(agent.state.params)
+
+#         if step % config.log_period == 0 and wandb_logger:
+#             wandb_logger.log(update_info, step=step)
+#             wandb_logger.log({"timer": timer.get_average_times()}, step=step)
+
+#         if step > 0 and config.checkpoint_period and step % config.checkpoint_period == 0:
+#             os.makedirs(FLAGS.checkpoint_path, exist_ok=True)
+#             checkpoints.save_checkpoint(
+#                 os.path.abspath(FLAGS.checkpoint_path),
+#                 agent.state,
+#                 step=step,
+#                 keep=100,
+#             )
+
+
+# # ==============================================================
+# # 主函数
+# # ==============================================================
+# def main(_):
+#     config = env_config
+#     assert config.batch_size % num_devices == 0, "Batch size 必须能被设备数整除"
+
+#     if FLAGS.learner == FLAGS.actor:
+#         raise ValueError("❌ 必须且只能指定一个：--learner=True 或 --actor=True")
+
+#     rng = jax.random.PRNGKey(FLAGS.seed)
+#     rng, sampling_rng = jax.random.split(rng)
+
+#     print_green(f"JAX backend: {jax.default_backend()}, devices: {jax.devices()}")
+
+#     # ---------------------------------------------------------
+#     # 【合并后关键差异】
+#     # Learner 与 Actor 都先从 demo 推断网络结构。
+#     # Actor 的真实环境延后到 agent 初始化之后再创建。
+#     # ---------------------------------------------------------
+#     if FLAGS.learner:
+#         assert FLAGS.demo_path is not None, "❌ Learner 必须通过 --demo_path 传入初始 demo 数据路径"
+#         demo_paths = resolve_demo_paths(FLAGS.demo_path)
+#         observation_space, action_space, sample_obs, sample_action = build_spaces_and_samples_from_demos(demo_paths)
+#         env = None
+#     else:
+#         assert FLAGS.demo_path is not None, "❌ Actor 现在也需要通过 --demo_path 提供一份 demo，用于初始化网络结构"
+#         demo_paths = resolve_demo_paths(FLAGS.demo_path)
+#         observation_space, action_space, sample_obs, sample_action = build_spaces_and_samples_from_demos(demo_paths)
+#         env = None
+
+#     rng, sampling_rng = jax.random.split(rng)
+
+#     # ---------------------------------------------------------
+#     # 按 setup_mode 创建对应 SAC agent
+#     # ---------------------------------------------------------
+#     if config.setup_mode in ["single-arm-fixed-gripper", "dual-arm-fixed-gripper"]:
+#         agent: SACAgent = make_sac_pixel_agent(
+#             seed=FLAGS.seed,
+#             sample_obs=sample_obs,
+#             sample_action=sample_action,
+#             image_keys=config.image_keys,
+#             encoder_type=config.encoder_type,
+#             discount=config.discount,
+#         )
+#         include_grasp_penalty = False
+
+#     elif config.setup_mode == "single-arm-learned-gripper":
+#         agent: SACAgentHybridSingleArm = make_sac_pixel_agent_hybrid_single_arm(
+#             seed=FLAGS.seed,
+#             sample_obs=sample_obs,
+#             sample_action=sample_action,
+#             image_keys=config.image_keys,
+#             encoder_type=config.encoder_type,
+#             discount=config.discount,
+#         )
+#         include_grasp_penalty = True
+
+#     elif config.setup_mode == "dual-arm-learned-gripper":
+#         agent: SACAgentHybridDualArm = make_sac_pixel_agent_hybrid_dual_arm(
+#             seed=FLAGS.seed,
+#             sample_obs=sample_obs,
+#             sample_action=sample_action,
+#             image_keys=config.image_keys,
+#             encoder_type=config.encoder_type,
+#             discount=config.discount,
+#         )
+#         include_grasp_penalty = True
+
+#     else:
+#         raise NotImplementedError(f"Unknown setup mode: {config.setup_mode}")
+
+#     # ---------------------------------------------------------
+#     # 【合并后关键差异】
+#     # Learner：继续多设备 replicate
+#     # Actor：只保留单机参数树，不做 replicate
+#     # ---------------------------------------------------------
+#     if FLAGS.learner:
+#         agent = jax.device_put(
+#             jax.tree_util.tree_map(jnp.array, agent),
+#             sharding.replicate(),
+#         )
+#     else:
+#         agent = jax.tree_util.tree_map(jnp.array, agent)
+
+#     # ---------------------------------------------------------
+#     # checkpoint 恢复逻辑
+#     # ---------------------------------------------------------
+#     if (
+#         FLAGS.checkpoint_path is not None
+#         and os.path.exists(FLAGS.checkpoint_path)
+#         and glob.glob(os.path.join(FLAGS.checkpoint_path, "checkpoint_*"))
+#     ):
+#         input("Checkpoint path already exists. Press Enter to resume training.")
+#         ckpt = checkpoints.restore_checkpoint(
+#             os.path.abspath(FLAGS.checkpoint_path),
+#             agent.state,
+#         )
+#         agent = agent.replace(state=ckpt)
+#         latest_ckpt = checkpoints.latest_checkpoint(os.path.abspath(FLAGS.checkpoint_path))
+#         if latest_ckpt:
+#             ckpt_number = os.path.basename(latest_ckpt)[11:]
+#             print_green(f"Loaded previous checkpoint at step {ckpt_number}.")
+
+#     # ---------------------------------------------------------
+#     # Learner 分支
+#     # ---------------------------------------------------------
+#     if FLAGS.learner:
+#         sampling_rng = jax.device_put(sampling_rng, device=sharding.replicate())
+
+#         replay_buffer = MemoryEfficientReplayBufferDataStore(
+#             observation_space,
+#             action_space,
+#             capacity=config.replay_buffer_capacity,
+#             image_keys=config.image_keys,
+#             include_grasp_penalty=include_grasp_penalty,
+#         )
+#         demo_buffer = MemoryEfficientReplayBufferDataStore(
+#             observation_space,
+#             action_space,
+#             capacity=config.replay_buffer_capacity,
+#             image_keys=config.image_keys,
+#             include_grasp_penalty=include_grasp_penalty,
+#         )
+
+#         wandb_logger = make_wandb_logger(
+#             project="hil-serl",
+#             description=FLAGS.exp_name,
+#             debug=FLAGS.debug,
+#         )
+
+#         demo_paths = resolve_demo_paths(FLAGS.demo_path)
+#         for path in demo_paths:
+#             with open(path, "rb") as f:
+#                 transitions = pkl.load(f)
+#                 for transition in transitions:
+#                     if "infos" in transition and "grasp_penalty" in transition["infos"]:
+#                         transition["grasp_penalty"] = transition["infos"]["grasp_penalty"]
+#                     demo_buffer.insert(transition)
+
+#         print_green(f"demo buffer size: {len(demo_buffer)}")
+#         print_green(f"online buffer size: {len(replay_buffer)}")
+
+#         if FLAGS.checkpoint_path is not None and os.path.exists(os.path.join(FLAGS.checkpoint_path, "buffer")):
+#             for file in glob.glob(os.path.join(FLAGS.checkpoint_path, "buffer/*.pkl")):
+#                 with open(file, "rb") as f:
+#                     transitions = pkl.load(f)
+#                     for transition in transitions:
+#                         replay_buffer.insert(transition)
+#             print_green(f"Loaded previous buffer data. Replay buffer size: {len(replay_buffer)}")
+
+#         if FLAGS.checkpoint_path is not None and os.path.exists(os.path.join(FLAGS.checkpoint_path, "demo_buffer")):
+#             for file in glob.glob(os.path.join(FLAGS.checkpoint_path, "demo_buffer/*.pkl")):
+#                 with open(file, "rb") as f:
+#                     transitions = pkl.load(f)
+#                     for transition in transitions:
+#                         demo_buffer.insert(transition)
+#             print_green(f"Loaded previous demo buffer data. Demo buffer size: {len(demo_buffer)}")
+
+#         print_green("starting learner loop")
+#         learner(
+#             sampling_rng,
+#             agent,
+#             replay_buffer,
+#             demo_buffer=demo_buffer,
+#             wandb_logger=wandb_logger,
+#             config=config,
+#         )
+
+#     # ---------------------------------------------------------
+#     # Actor 分支
+#     # ---------------------------------------------------------
+#     else:
+#         # Actor 只用单设备 RNG
+#         sampling_rng = jax.device_put(sampling_rng)
+
+#         # 训练 Actor：需要 VR；评估 Actor：不要 VR
+#         use_vr = False if FLAGS.eval_checkpoint_step > 0 else True
+
+#         # -----------------------------------------------------
+#         # 【合并后关键差异】
+#         # 真实环境延后到 agent 初始化之后再创建。
+#         # 这对你当前本地 actor 更稳。
+#         # classifier=True：保留你当前已验证能工作的奖励分类器路径。
+#         # -----------------------------------------------------
+#         env = env_config.get_environment(
+#             fake_env=False,
+#             save_video=FLAGS.save_video if FLAGS.eval_checkpoint_step > 0 else False,
+#             classifier=True,
+#             use_vr=use_vr,
+#         )
+#         env = RecordEpisodeStatistics(env)
+
+#         data_store = QueuedDataStore(50000)
+#         intvn_data_store = QueuedDataStore(50000)
+
+#         print_green("starting actor loop")
+#         actor(
+#             agent,
+#             data_store,
+#             intvn_data_store,
+#             env,
+#             sampling_rng,
+#             config,
+#         )
+
+
+# if __name__ == "__main__":
+#     app.run(main)
 
 
 
