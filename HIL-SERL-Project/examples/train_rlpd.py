@@ -126,11 +126,11 @@
 #用处：转接learner（服务器）端口5588,
 #另开本地终端输入指令：
 # python train_rlpd.py \
-#   --exp_name=galaxea_usb_insertion \
+#   --exp_name=galaxea_usb_insertion_single \
 #   --actor=True \
 #   --ip=localhost \
 #   --demo_path=./demo_data \
-#   --checkpoint_path=./rlpd_checkpoints \
+#   --checkpoint_path=./rlpd_checkpoints_single \
 #   --debug=True
 
 
@@ -483,6 +483,14 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
 
         with timer.context("step_env"):
             next_obs, reward, done, truncated, info = env.step(actions)
+
+            print(
+                f"[reward-debug] step={step}, "
+                f"reward={reward}, done={done}, truncated={truncated}, "
+                f"succeed={info.get('succeed', None)}, "
+                f"grasp_penalty={info.get('grasp_penalty', None)}, "
+                f"info_keys={list(info.keys())}"
+            )
 
             if "left" in info:
                 info.pop("left")

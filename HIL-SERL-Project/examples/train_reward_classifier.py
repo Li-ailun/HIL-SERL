@@ -39,6 +39,9 @@
 #     我把 env.action_space.sample() 改成全零动作，对当前 reward classifier 训练基本没影响（因为新代码也没有真正训练动作）
 import os
 import sys
+import glob
+import pickle as pkl
+import functools
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SERL_LAUNCHER_ROOT = os.path.join(PROJECT_ROOT, "serl_launcher")
@@ -48,12 +51,11 @@ if PROJECT_ROOT not in sys.path:
 if SERL_LAUNCHER_ROOT not in sys.path:
     sys.path.insert(0, SERL_LAUNCHER_ROOT)
 
-import glob
-import pickle as pkl
-
 import jax
-from jax import numpy as jnp
+import jax.numpy as jnp
+import jax.lax as lax
 import flax.linen as nn
+from flax import jax_utils
 from flax.training import checkpoints
 import numpy as np
 import optax
@@ -72,7 +74,7 @@ from examples.galaxea_task.mappings import CONFIG_MAPPING
 FLAGS = flags.FLAGS
 flags.DEFINE_string("exp_name", None, "Name of experiment corresponding to folder.")
 flags.DEFINE_integer("num_epochs", 150, "Number of training epochs.")
-flags.DEFINE_integer("batch_size", 256, "Batch size.")
+flags.DEFINE_integer("batch_size", 256, "Global batch size across all GPUs.")
 
 
 def infer_space_from_value(x):
@@ -101,7 +103,7 @@ def build_spaces_from_dataset(success_paths, failure_paths):
     """从 success / failure pkl 中找一条样本，推断 observation_space 和 action_space。"""
     all_paths = list(success_paths) + list(failure_paths)
     if not all_paths:
-        raise ValueError("classifier_data 目录下没有找到 success/failure pkl 文件")
+        raise ValueError("classifier_data_single 目录下没有找到 success/failure pkl 文件")
 
     sample_transition = None
     for path in all_paths:
@@ -119,19 +121,51 @@ def build_spaces_from_dataset(success_paths, failure_paths):
     return observation_space, action_space
 
 
+def shard_batch(batch, num_devices: int):
+    """把全局 batch reshape 成 [n_devices, per_device_batch, ...]。"""
+    def _shard(x):
+        x = np.asarray(x)
+        if x.shape[0] % num_devices != 0:
+            raise ValueError(
+                f"Batch 第一维 {x.shape[0]} 不能被设备数 {num_devices} 整除"
+            )
+        return x.reshape((num_devices, x.shape[0] // num_devices) + x.shape[1:])
+
+    return jax.tree_util.tree_map(_shard, batch)
+
+
+def tree_to_host_numpy(tree):
+    """把 pytree 里的 jax.Array 全部转成 host numpy，便于 checkpoints.save_checkpoint。"""
+    return jax.tree_util.tree_map(
+        lambda x: np.asarray(jax.device_get(x)) if isinstance(x, (jax.Array, jnp.ndarray)) else x,
+        tree,
+    )
+
+
 def main(_):
     assert FLAGS.exp_name in CONFIG_MAPPING, "Experiment folder not found."
     config = CONFIG_MAPPING[FLAGS.exp_name]()
 
+    num_devices = jax.local_device_count()
     devices = jax.local_devices()
-    sharding = jax.sharding.PositionalSharding(devices)
 
-    # 先从数据集文件推断 spaces，彻底绕开真实环境
+    if FLAGS.batch_size % num_devices != 0:
+        raise ValueError(
+            f"FLAGS.batch_size={FLAGS.batch_size} 必须能被设备数 num_devices={num_devices} 整除"
+        )
+
+    print(f"Using {num_devices} local devices: {devices}")
+    print(f"Global batch size: {FLAGS.batch_size}")
+    print(f"Per-device batch size: {FLAGS.batch_size // num_devices}")
+
     success_paths = glob.glob(os.path.join(os.getcwd(), "classifier_data_single", "*success*.pkl"))
     failure_paths = glob.glob(os.path.join(os.getcwd(), "classifier_data_single", "*failure*.pkl"))
+
     observation_space, action_space = build_spaces_from_dataset(success_paths, failure_paths)
 
-    # Create buffer for positive transitions
+    # -----------------------------
+    # Positive buffer
+    # -----------------------------
     pos_buffer = ReplayBuffer(
         observation_space,
         action_space,
@@ -144,22 +178,21 @@ def main(_):
             success_data = pkl.load(f)
 
         for trans in success_data:
-            # 保留你原来的过滤逻辑
             if "images" in trans["observations"].keys():
                 continue
 
             trans = dict(trans)
             trans["labels"] = 1
-            # 不再依赖 env.action_space.sample()
             trans["actions"] = np.zeros_like(np.asarray(trans["actions"]), dtype=np.float32)
             pos_buffer.insert(trans)
 
     pos_iterator = pos_buffer.get_iterator(
         sample_args={"batch_size": FLAGS.batch_size // 2},
-        device=sharding.replicate(),
     )
 
-    # Create buffer for negative transitions
+    # -----------------------------
+    # Negative buffer
+    # -----------------------------
     neg_buffer = ReplayBuffer(
         observation_space,
         action_space,
@@ -182,98 +215,124 @@ def main(_):
 
     neg_iterator = neg_buffer.get_iterator(
         sample_args={"batch_size": FLAGS.batch_size // 2},
-        device=sharding.replicate(),
     )
 
     print(f"failed buffer size: {len(neg_buffer)}")
     print(f"success buffer size: {len(pos_buffer)}")
 
     rng = jax.random.PRNGKey(0)
-    rng, key = jax.random.split(rng)
+    rng, init_key = jax.random.split(rng)
 
+    # 用一组未分片的 sample 初始化 classifier
     pos_sample = next(pos_iterator)
     neg_sample = next(neg_iterator)
     sample = concat_batches(pos_sample, neg_sample, axis=0)
 
-    rng, key = jax.random.split(rng)
     classifier = create_classifier(
-        key,
+        init_key,
         sample["observations"],
         config.classifier_keys,
     )
 
+    # 复制到多 GPU
+    classifier = jax_utils.replicate(classifier)
+
     def data_augmentation_fn(rng, observations):
+        """这里输入是单个 device 上的 local batch，所以 num_batch_dims=1。"""
         for pixel_key in config.classifier_keys:
+            rng, crop_key = jax.random.split(rng)
             observations = observations.copy(
                 add_or_replace={
                     pixel_key: batched_random_crop(
                         observations[pixel_key],
-                        rng,
+                        crop_key,
                         padding=4,
-                        num_batch_dims=2,
+                        num_batch_dims=1,
                     )
                 }
             )
         return observations
 
-    @jax.jit
-    def train_step(state, batch, key):
+    @functools.partial(jax.pmap, axis_name="devices")
+    def train_step(state, batch, aug_key, dropout_key):
+        obs = data_augmentation_fn(aug_key, batch["observations"])
+        batch = batch.copy(add_or_replace={"observations": obs})
+
         def loss_fn(params):
             logits = state.apply_fn(
                 {"params": params},
                 batch["observations"],
-                rngs={"dropout": key},
+                rngs={"dropout": dropout_key},
                 train=True,
             )
-            return optax.sigmoid_binary_cross_entropy(logits, batch["labels"]).mean()
+            loss = optax.sigmoid_binary_cross_entropy(logits, batch["labels"]).mean()
+            return loss, logits
 
-        grad_fn = jax.value_and_grad(loss_fn)
-        loss, grads = grad_fn(state.params)
+        (loss, logits), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
 
-        logits = state.apply_fn(
-            {"params": state.params},
-            batch["observations"],
-            train=False,
-            rngs={"dropout": key},
-        )
-        train_accuracy = jnp.mean((nn.sigmoid(logits) >= 0.5) == batch["labels"])
+        grads = lax.pmean(grads, axis_name="devices")
+        loss = lax.pmean(loss, axis_name="devices")
 
-        return state.apply_gradients(grads=grads), loss, train_accuracy
+        preds = (nn.sigmoid(logits) >= 0.5)
+        acc = jnp.mean(preds == batch["labels"])
+        acc = lax.pmean(acc, axis_name="devices")
+
+        new_state = state.apply_gradients(grads=grads)
+        return new_state, loss, acc
 
     for epoch in tqdm(range(FLAGS.num_epochs)):
         pos_sample = next(pos_iterator)
         neg_sample = next(neg_iterator)
-
         batch = concat_batches(pos_sample, neg_sample, axis=0)
 
-        rng, key = jax.random.split(rng)
-        obs = data_augmentation_fn(key, batch["observations"])
-        batch = batch.copy(
-            add_or_replace={
-                "observations": obs,
-                "labels": batch["labels"][..., None],
-            }
+        # labels -> float32, shape [B, 1]
+        labels = np.asarray(batch["labels"], dtype=np.float32)[..., None]
+        batch = batch.copy(add_or_replace={"labels": labels})
+
+        # 分片到多 GPU
+        batch = shard_batch(batch, num_devices)
+
+        rng, aug_master_key = jax.random.split(rng)
+        rng, dropout_master_key = jax.random.split(rng)
+
+        aug_keys = jax.random.split(aug_master_key, num_devices)
+        dropout_keys = jax.random.split(dropout_master_key, num_devices)
+
+        classifier, train_loss, train_accuracy = train_step(
+            classifier,
+            batch,
+            aug_keys,
+            dropout_keys,
         )
 
-        rng, key = jax.random.split(rng)
-        classifier, train_loss, train_accuracy = train_step(classifier, batch, key)
+        # pmap 返回每张卡一份相同标量，取第 0 张即可
+        train_loss_scalar = float(jax.device_get(train_loss[0]))
+        train_acc_scalar = float(jax.device_get(train_accuracy[0]))
 
         print(
             f"Epoch: {epoch + 1}, "
-            f"Train Loss: {train_loss:.4f}, "
-            f"Train Accuracy: {train_accuracy:.4f}"
+            f"Train Loss: {train_loss_scalar:.4f}, "
+            f"Train Accuracy: {train_acc_scalar:.4f}"
         )
 
+    # 关键：保存前先 unreplicate，再转成 host numpy
+    classifier_to_save = jax_utils.unreplicate(classifier)
+    classifier_to_save = tree_to_host_numpy(classifier_to_save)
+
+    save_dir = os.path.join(os.getcwd(), "classifier_ckpt_single")
+    os.makedirs(save_dir, exist_ok=True)
+
     checkpoints.save_checkpoint(
-        os.path.join(os.getcwd(), "classifier_ckpt_single/"),
-        classifier,
+        save_dir,
+        classifier_to_save,
         step=FLAGS.num_epochs,
         overwrite=True,
     )
 
+    print(f"✅ classifier checkpoint 已保存到: {save_dir}")
+
 
 if __name__ == "__main__":
     app.run(main)
-
 
 
