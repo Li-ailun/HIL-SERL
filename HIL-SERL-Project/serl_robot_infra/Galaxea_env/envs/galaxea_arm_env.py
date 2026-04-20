@@ -360,7 +360,7 @@ class GalaxeaArmEnv(gym.Env):
             time.sleep(max(0, (1.0 / self.hz) - dt))
         self._get_sync_obs()
 
-    def interpolate_move_single(self, goal_pose: np.ndarray, timeout: float, gripper: float = 1.0):
+    def interpolate_move_single(self, goal_pose: np.ndarray, timeout: float, gripper: float = 100.0):
         """单臂线性插值平滑复位。"""
         steps = int(timeout * self.hz)
         self._get_sync_obs()
@@ -388,7 +388,7 @@ class GalaxeaArmEnv(gym.Env):
         if self.arm_mode == "dual":
             self.interpolate_move_dual(self.reset_l, self.reset_r, timeout=1.5)
         else:
-            self.interpolate_move_single(self.reset_pose, timeout=1.5, gripper=1.0)
+            self.interpolate_move_single(self.reset_pose, timeout=1.5, gripper=100.0)
 
         time.sleep(0.5)
 

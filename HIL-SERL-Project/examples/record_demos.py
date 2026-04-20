@@ -34,8 +34,12 @@
 #过滤静止帧再保存demos（ros2 topic echo /motion_control/pose_ee_arm_right可以确认vr暂停后数值不会变化，所以可以视为静止帧 ）
 #（可以回放录制的demos，看看动作是不是流畅的）
 
+#录制的action【6】官方代表持续的张开/闭合命令，我们修改自己的情况，让其符合想闭合就显示一直闭合，想张开就一直张开的情况
+
+
 import os
 import sys
+import time
 
 # ==============================================================
 # 🔥 像 actor 一样，先强制本地 CPU，避免 classifier=True 时本地环境炸
@@ -200,12 +204,27 @@ def rewrite_gripper_action_with_feedback(action, next_obs, prev_label):
     return action, new_label
 
 
+def build_safe_idle_action(action_shape):
+    """
+    默认发给机器人的“安全空动作”：
+    - 前 6 维全 0，不继续推动末端
+    - 最后一维给安全夹爪保持值
+    """
+    safe_idle_action = np.zeros(action_shape, dtype=np.float32)
+    if safe_idle_action.shape[0] == 7:
+        # 这里用你当前假定的安全保持值；若实测不对，改这里
+        # 在非 reset 的正常 step 阶段，默认持续给夹爪发送 80.0。
+        safe_idle_action[6] = 80.0
+    return safe_idle_action
+
+
 def main(_):
     print(f"🚀 开始录制专家数据：{FLAGS.exp_name}")
     print(f"🧠 reward classifier: {'开启' if FLAGS.classifier else '关闭'}")
     print("📌 当前脚本策略：")
     print("   - classifier=True 时：成功由 reward ckpt 在成功瞬间触发。")
     print("   - max_episode_steps 只做失败/超时兜底。")
+    print("   - 默认不再发送全 0 动作，而是发送安全空动作。")
     print("   - 夹爪标签不再保存瞬时按钮命令，而是由反馈量程反推：")
     print("       0~30   -> 闭合(-1)")
     print("       70~100 -> 张开(+1)")
@@ -218,6 +237,8 @@ def main(_):
     )
 
     obs, info = env.reset()
+    safe_idle_action = build_safe_idle_action(env.action_space.shape)
+
     print("✅ 环境重置完成，请戴上 VR 头显准备接管！")
 
     transitions = []
@@ -231,21 +252,35 @@ def main(_):
     returns = 0.0
     episode_step = 0
 
-    # 记录当前 episode 的夹爪稳定标签
+    # 当前 episode 的夹爪稳定标签
     prev_gripper_label = None
 
     while success_count < success_needed:
-        raw_actions = np.zeros(env.action_space.shape, dtype=np.float32)
 
-        next_obs, rew, done, truncated, info = env.step(raw_actions)
+        base_env = env.unwrapped
+
+        # 非 reset 阶段，如果还在 Mode 2，就什么都不发，只等待切回 Mode 0
+        if getattr(base_env, "script_control_enabled", False):
+            time.sleep(0.05)
+            continue
+        # 默认执行固定“安全空动作”
+        exec_action = safe_idle_action.copy()
+
+        next_obs, rew, done, truncated, info = env.step(exec_action)
         returns += float(rew)
         episode_step += 1
 
+        # ------------------------------------------------------
+        # 记录逻辑：
+        # - 有 VR 接管：记录 intervene_action
+        # - 无 VR 接管：这一帧视为静止/空闲帧，不录
+        # ------------------------------------------------------
         if "intervene_action" in info:
             raw_actions = np.asarray(info["intervene_action"], dtype=np.float32)
-
-        # 先判断“静止帧”，避免因为后面把 gripper 改成 ±1 而导致每帧都非静止
-        is_static = np.allclose(raw_actions, 0.0, atol=1e-8)
+            is_static = np.allclose(raw_actions, 0.0, atol=1e-8)
+        else:
+            raw_actions = np.zeros(env.action_space.shape, dtype=np.float32)
+            is_static = True
 
         # 用夹爪反馈量程反推 gripper 训练标签
         actions, prev_gripper_label = rewrite_gripper_action_with_feedback(
@@ -329,6 +364,7 @@ def main(_):
 
             print("🔄 正在复位机器人...")
             obs, info = env.reset()
+            safe_idle_action = build_safe_idle_action(env.action_space.shape)
             print("✅ 复位完成，可进行下一次演示。\n" + "-" * 40)
 
     save_dir = os.path.join(os.path.dirname(__file__), "demo_data_single")
@@ -349,7 +385,6 @@ def main(_):
 
 if __name__ == "__main__":
     app.run(main)
-
 
 
 

@@ -121,6 +121,7 @@ class GalaxeaUSBEnvConfig:
     RESET_POSE = np.array([0.41774907445156195, -0.25200100000000003, 0.012723447389100126, 7.697375045982823e-05,-0.7235532515928197, -7.34328254905007e-05, 0.6902685570067056], dtype=np.float32)
 
     # 为兼容旧逻辑，保留双臂字段也无妨
+    #夹爪复位指令硬编码在env脚本的go to reset中，目前硬编码100
     RESET_L = np.array([0.2, 0.25, -0.3, 0.0, 0.0, 0.0, 1.0], dtype=np.float32)
     RESET_R = np.array([0.41774907445156195, -0.25200100000000003, 0.012723447389100126, 7.697375045982823e-05,-0.7235532515928197, -7.34328254905007e-05, 0.6902685570067056], dtype=np.float32)
 
@@ -140,6 +141,8 @@ class GalaxeaUSBEnvConfig:
     # ==============================
     ENV_IMAGE_KEYS = ["head_rgb", "left_wrist_rgb", "right_wrist_rgb"]
     DISPLAY_IMAGE_KEYS = ["left_wrist_rgb", "head_rgb", "right_wrist_rgb"]
+    # ENV_IMAGE_KEYS = ["head_rgb", "left_wrist_rgb"]
+    # DISPLAY_IMAGE_KEYS = ["left_wrist_rgb", "head_rgb"]
     IMAGE_OBS_SIZE = (128, 128)
 
     DISPLAY_WINDOW_NAME = "Galaxea Vision Monitor"
@@ -165,7 +168,7 @@ class GalaxeaUSBEnvConfig:
     }
 
     HEAD_CAMERA = {
-        "device_index": 2,   #v4l2-ctl --list-devices查询
+        "device_index": 0,   #v4l2-ctl --list-devices查询
         "api": cv2.CAP_V4L2,
         "fourcc": "MJPG",
         "frame_width": 1344,
@@ -318,6 +321,7 @@ class GalaxeaUSBTrainConfig(DefaultTrainingConfig):
                 print(f"⚠️ 分类器加载失败（如果你还没训练它，这属于正常现象）: {e}")
 
         # 5) 单臂 gripper 惩罚
+        #如果夹爪频繁开合/抽搐，给予惩罚0.02分
         env = SingleGripperPenaltyWrapper(env, penalty=-0.02)
 
         return env

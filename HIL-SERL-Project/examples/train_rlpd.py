@@ -461,6 +461,62 @@ def rewrite_single_arm_gripper_action_with_feedback(action, next_obs, prev_label
     action[6] = new_label
     return action, new_label
 
+def map_single_arm_exec_action_to_hardware(
+    action,
+    prev_hw_cmd,
+    close_cmd=20.0,
+    open_cmd=80.0,
+    deadband=0.5,
+):
+    """
+    把训练/策略空间里的单臂 gripper 动作，映射成真机执行值。
+
+    语义：
+    - policy / demo / intervene_action 里的 action[6]：
+        +1 代表张开
+        -1 代表闭合
+        中间死区代表“保持上一状态”
+    - 真机执行时：
+        open_cmd  -> 发送给硬件的张开值（如 80）
+        close_cmd -> 发送给硬件的闭合值（如 20）
+
+    兼容：
+    - 如果传进来的 action[6] 本身已经是 0~100 的硬件值，就直接透传。
+    """
+    action = np.asarray(action, dtype=np.float32).copy()
+
+    if action.shape[0] != 7:
+        return action, prev_hw_cmd
+
+    grip = float(action[6])
+
+    # 已经是硬件量程值：直接透传
+    if 0.0 <= grip <= 100.0 and abs(grip) > 5.0:
+        hw_cmd = grip
+    else:
+        # 标签空间 / 策略空间：±1 + deadband
+        if grip >= deadband:
+            hw_cmd = open_cmd
+        elif grip <= -deadband:
+            hw_cmd = close_cmd
+        else:
+            hw_cmd = prev_hw_cmd
+
+    exec_action = action.copy()
+    exec_action[6] = np.float32(hw_cmd)
+    return exec_action, float(hw_cmd)
+
+
+def build_single_arm_open_exec_action_like(action):
+    """
+    用于 reset 后初始化“上一夹爪执行值”。
+    这里只关心 gripper 默认保持张开。
+    """
+    action = np.asarray(action, dtype=np.float32).copy()
+    if action.shape[0] == 7:
+        action[6] = 80.0
+    return action
+
 # ==============================================================
 # Learner / Actor 共用辅助：从 demo 推断空间与网络样本
 # --------------------------------------------------------------
@@ -553,20 +609,35 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
             done = False
             start_time = time.time()
 
+            # reset 后默认夹爪张开
+            prev_exec_gripper_cmd = 80.0
+
             while not done:
                 sampling_rng, key = jax.random.split(sampling_rng)
-                actions = agent.sample_actions(
+
+                # 这是策略输出的“标签空间动作”
+                policy_actions = agent.sample_actions(
                     observations=jax.device_put(obs),
                     argmax=False,
                     seed=key,
                 )
-                actions = np.asarray(jax.device_get(actions))
+                policy_actions = np.asarray(jax.device_get(policy_actions), dtype=np.float32)
 
-                next_obs, reward, done, truncated, info = env.step(actions)
+                # 这是实际发给真机的“硬件空间动作”
+                exec_actions, prev_exec_gripper_cmd = map_single_arm_exec_action_to_hardware(
+                    policy_actions,
+                    prev_exec_gripper_cmd,
+                )
+
+                next_obs, reward, done, truncated, info = env.step(exec_actions)
                 obs = next_obs
 
                 if reward or done or truncated:
-                    print(f"[reward-debug] reward={reward}, done={done}, truncated={truncated}")
+                    print(
+                        f"[reward-debug] reward={reward}, done={done}, truncated={truncated}, "
+                        f"policy_gripper={policy_actions[6] if policy_actions.shape[0] == 7 else 'N/A'}, "
+                        f"exec_gripper={exec_actions[6] if exec_actions.shape[0] == 7 else 'N/A'}"
+                    )
 
                 if done:
                     if reward:
@@ -627,8 +698,12 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
     intervention_count = 0
     intervention_steps = 0
 
-    # 当前 episode 的夹爪稳定标签
+    # 存盘标签用：记录当前 episode 的稳定夹爪标签
     prev_gripper_label = None
+
+    # 真机执行用：记录当前 episode 的上一帧硬件夹爪命令
+    # reset 后默认张开
+    prev_exec_gripper_cmd = 80.0
 
     pbar = tqdm.tqdm(range(start_step, config.max_steps), dynamic_ncols=True, desc="actor")
     for step in pbar:
@@ -636,27 +711,54 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
 
         with timer.context("sample_actions"):
             if step < config.random_steps:
-                raw_actions = env.action_space.sample()
+                # 随机探索时，这里仍当作“标签空间动作”来理解
+                policy_actions = np.asarray(env.action_space.sample(), dtype=np.float32)
             else:
                 sampling_rng, key = jax.random.split(sampling_rng)
-                raw_actions = agent.sample_actions(
+                policy_actions = agent.sample_actions(
                     observations=jax.device_put(obs),
                     seed=key,
                     argmax=False,
                 )
-                raw_actions = np.asarray(jax.device_get(raw_actions))
+                policy_actions = np.asarray(jax.device_get(policy_actions), dtype=np.float32)
 
         with timer.context("step_env"):
-            next_obs, reward, done, truncated, info = env.step(raw_actions)
+            # -------------------------------------------------
+            # 关键修复：
+            # policy_actions 是训练/标签空间（±1 语义）
+            # exec_actions   是发给真机的硬件空间（20/80 语义）
+            # -------------------------------------------------
+            exec_actions, prev_exec_gripper_cmd = map_single_arm_exec_action_to_hardware(
+                policy_actions,
+                prev_exec_gripper_cmd,
+            )
+
+            next_obs, reward, done, truncated, info = env.step(exec_actions)
 
             if "left" in info:
                 info.pop("left")
             if "right" in info:
                 info.pop("right")
 
-            # 如果有人类接管，就用 intervene_action 作为原始动作命令
+            # -------------------------------------------------
+            # 存盘动作：
+            # - 没有人类接管时，存 policy_actions（标签空间）
+            # - 有人类接管时，存 intervene_action（标签空间）
+            # -------------------------------------------------
+            stored_actions = policy_actions.copy()
+
             if "intervene_action" in info:
-                raw_actions = np.asarray(info.pop("intervene_action"), dtype=np.float32)
+                stored_actions = np.asarray(info.pop("intervene_action"), dtype=np.float32)
+
+                # 重要：
+                # 人类在 Mode0 下真的执行了自己的 gripper 动作，
+                # 所以下一帧切回 Mode2 时，actor 的“保持上一状态”必须同步到
+                # 人类刚刚执行过的开/闭状态。
+                _, prev_exec_gripper_cmd = map_single_arm_exec_action_to_hardware(
+                    stored_actions,
+                    prev_exec_gripper_cmd,
+                )
+
                 intervention_steps += 1
                 if not already_intervened:
                     intervention_count += 1
@@ -665,11 +767,11 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
                 already_intervened = False
 
             # -------------------------------------------------
-            # 用夹爪反馈量程反推稳定 gripper 训练标签
-            # 只改 action[6]，其余维保持不变
+            # 训练标签修正：
+            # 用反馈量程把存盘的 action[6] 稳定化成 ±1
             # -------------------------------------------------
             actions, prev_gripper_label = rewrite_single_arm_gripper_action_with_feedback(
-                raw_actions,
+                stored_actions,
                 next_obs,
                 prev_gripper_label,
             )
@@ -677,7 +779,7 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
             running_return += reward
             transition = dict(
                 observations=obs,
-                actions=actions,
+                actions=actions,  # 注意：这里存的是训练标签动作，不是真机硬件动作
                 next_observations=next_obs,
                 rewards=reward,
                 masks=1.0 - done,
@@ -695,6 +797,15 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
 
             obs = next_obs
 
+            if step % 20 == 0 and actions.shape[0] == 7:
+                print(
+                    f"[actor-gripper-debug] step={step}, "
+                    f"stored_label={actions[6]:.3f}, "
+                    f"policy_raw={policy_actions[6]:.3f}, "
+                    f"exec_hw={exec_actions[6]:.3f}, "
+                    f"reward={reward}, done={done}, truncated={truncated}"
+                )
+
             if done or truncated:
                 if "episode" not in info:
                     info["episode"] = {}
@@ -710,6 +821,9 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
                 intervention_steps = 0
                 already_intervened = False
                 prev_gripper_label = None
+
+                # reset 后默认夹爪张开
+                prev_exec_gripper_cmd = 80.0
 
                 client.update()
                 obs, _ = env.reset()
@@ -733,7 +847,6 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
         if step % config.log_period == 0:
             stats = {"timer": timer.get_average_times()}
             client.request("send-stats", stats)
-
 
 # ==============================================================
 # Learner 逻辑

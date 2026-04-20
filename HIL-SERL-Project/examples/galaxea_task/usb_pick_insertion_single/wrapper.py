@@ -121,7 +121,7 @@ class GalaxeaUSBEnv(GalaxeaArmEnv):
             print("🤖 [USB Task Single Arm] 当前为无 VR 模式，直接发送复位轨迹...")
 
         # 统一 env 在 single 模式下提供 interpolate_move_single
-        self.interpolate_move_single(reset_pose, timeout=3.0, gripper=1.0)
+        self.interpolate_move_single(reset_pose, timeout=3.0, gripper=80.0)
         time.sleep(0.5)
 
         print("✅ 单臂复位坐标发送完毕！")
@@ -134,9 +134,9 @@ class SingleGripperPenaltyWrapper(gym.Wrapper):
     """
     单臂夹爪惩罚 wrapper。
 
-    单臂动作定义：
-        action[0:6] = arm delta
-        action[6]   = gripper command
+    兼容两种 gripper 语义：
+    1) 标签空间：-1 / +1
+    2) 硬件空间：0~30 视为闭合，70~100 视为张开
     """
 
     def __init__(
@@ -157,9 +157,29 @@ class SingleGripperPenaltyWrapper(gym.Wrapper):
         self.gripper_closed = None
         return obs, info
 
+    def _canonicalize_cmd(self, cmd: float) -> float:
+        """
+        统一把输入动作转成“标签语义”：
+        - 硬件空间：0~30 -> -1, 70~100 -> +1
+        - 标签空间：原样保留
+        - 中间区：保持原值（通常接近 0）
+        """
+        cmd = float(cmd)
+
+        # 硬件量程空间
+        if 0.0 <= cmd <= 30.0:
+            return -1.0
+        if 70.0 <= cmd <= 100.0:
+            return 1.0
+
+        # 标签空间（通常本来就在 [-1, 1]）
+        return cmd
+
     def _update_one_side(self, cmd, prev_closed):
         penalty_delta = 0.0
         new_closed = prev_closed
+
+        cmd = self._canonicalize_cmd(cmd)
 
         if cmd < self.close_thr:
             if prev_closed is False:
@@ -178,10 +198,11 @@ class SingleGripperPenaltyWrapper(gym.Wrapper):
         real_action = info.get("intervene_action", action)
         real_action = np.asarray(real_action, dtype=np.float32)
 
-        # 单臂动作维度应为 7
         assert real_action.shape[0] == 7, f"动作维度异常，期望 7，实际是 {real_action.shape}"
 
-        penalty_val, self.gripper_closed = self._update_one_side(real_action[6], self.gripper_closed)
+        penalty_val, self.gripper_closed = self._update_one_side(
+            real_action[6], self.gripper_closed
+        )
 
         reward += penalty_val
         info["grasp_penalty"] = penalty_val
