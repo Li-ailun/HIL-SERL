@@ -224,9 +224,25 @@ class GalaxeaUSBTrainConfig(DefaultTrainingConfig):
     discount: float = 0.98
 
     max_steps: int = 1_000_000
+    
+    #Learner 侧经验回放池的最大容量。
+    #训练全称最大容量，保证不会太快丢失老经验，也可以让新数据保留更多
     replay_buffer_capacity: int = 200_000
+
+    #这个参数只影响 Actor 采样动作的前期策略。
+    #从 actor 的第 0 步开始，就不走纯随机动作了（官网提供了bc训练脚本，我们可以bc训练后，修改rlpd脚本先加载bc权重，官方没这个功能）。
+    #一开始就让 actor 按 demo 初始化出来的策略分布去探索，而不是做完全无结构的随机探索。
     random_steps: int = 0
+
+    #Learner 什么时候真正开始训练更新。
+    #使你已经有很多 demos，learner 也不会立刻开始训练；
+    # 它仍然会先等 actor 送来至少 100 条在线 transition。
     training_starts: int = 100
+
+    #Learner 每完成 50 个 learner update step，就把最新网络参数发给 actor 一次。
+    #策略更新传播到 actor 的频率
+    #如果actor断了，则还是能继续做梯度更新；只是新的参数没人接收，并且不会再有新的 online 数据进来。
+    # actor断了后，learner一直在训练之前的旧数据集
     steps_per_update: int = 50
 
     log_period: int = 10
