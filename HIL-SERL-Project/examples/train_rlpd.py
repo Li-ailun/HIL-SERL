@@ -728,11 +728,17 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
             # policy_actions 是训练/标签空间（±1 语义）
             # exec_actions   是发给真机的硬件空间（20/80 语义）
             # -------------------------------------------------
-            exec_actions, prev_exec_gripper_cmd = map_single_arm_exec_action_to_hardware(
-                policy_actions,
-                prev_exec_gripper_cmd,
-            )
+            # exec_actions, prev_exec_gripper_cmd = map_single_arm_exec_action_to_hardware(
+            #     policy_actions,
+            #     prev_exec_gripper_cmd,
+            # )
 
+            # next_obs, reward, done, truncated, info = env.step(exec_actions)
+
+#             policy_actions：继续保持训练语义 [-1, 1]
+# env.step()：直接吃 policy_actions
+# 不要在 actor 这一层先映射成 80/20
+            exec_actions = policy_actions.copy()
             next_obs, reward, done, truncated, info = env.step(exec_actions)
 
             if "left" in info:
@@ -797,12 +803,35 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config):
 
             obs = next_obs
 
-            if step % 20 == 0 and actions.shape[0] == 7:
+            # 每1步打印一次以下消息：
+            # stored_label是根据实时反馈储存的标签
+            # exec_hw是给夹爪的量程指令
+            # policy_raw把此次夹爪量程指令转换成标签
+
+#             先用 policy_actions 采样策略动作；
+#             再用 map_single_arm_exec_action_to_hardware(...) 映射出 exec_actions；
+#             然后才 env.step(exec_actions)；
+#             最后才用 next_obs 去重写 stored_label。
+            if step % 50 == 0 and actions.shape[0] == 7:
+                # print(
+                #     f"[actor-gripper-debug] step={step}, "
+                #     f"stored_label={actions[6]:.3f}, "
+                #     f"policy_raw={policy_actions[6]:.3f}, "
+                #     f"exec_hw={exec_actions[6]:.3f}, "
+                #     f"has_intervene_action={'intervene_action' in info}, "
+                #     f"reward={reward}, done={done}, truncated={truncated}"
+                # )
+                hw_dbg = env.unwrapped._map_gripper_cmd_to_hardware(
+                   float(policy_actions[6]),
+                   arm_side="right",
+                )
+
                 print(
                     f"[actor-gripper-debug] step={step}, "
                     f"stored_label={actions[6]:.3f}, "
                     f"policy_raw={policy_actions[6]:.3f}, "
-                    f"exec_hw={exec_actions[6]:.3f}, "
+                    f"mapped_hw={hw_dbg:.3f}, "
+                    f"has_intervene_action={'intervene_action' in info}, "
                     f"reward={reward}, done={done}, truncated={truncated}"
                 )
 
