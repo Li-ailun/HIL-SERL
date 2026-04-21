@@ -704,8 +704,6 @@ class GalaxeaArmEnv(gym.Env):
         return formatted_obs
 
 
-# 兼容旧名字
-GalaxeaDualArmEnv = GalaxeaArmEnv
 
 
 # import os
