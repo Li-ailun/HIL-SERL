@@ -29,8 +29,6 @@ import time
 import numpy as np
 import gymnasium as gym
 
-# 如果你已经把统一版底层 env 覆盖到 dual_galaxea_env.py，
-# 这里既可以 import GalaxeaArmEnv，也可以继续 import GalaxeaDualArmEnv（因为我之前做了别名兼容）
 from serl_robot_infra.Galaxea_env.envs.galaxea_arm_env import GalaxeaArmEnv
 
 
@@ -38,14 +36,14 @@ class GalaxeaUSBEnv(GalaxeaArmEnv):
     """
     星海图 USB 插拔单臂任务环境（当前按右臂单臂配置）。
 
-    依赖前提：
-    1. 底层 env 已经改成统一版，支持：
-       - ARM_MODE = "single" / "dual"
-       - ARM_SIDE = "left" / "right"
-    2. config 中已经提供：
-       - ARM_MODE = "single"
-       - ARM_SIDE = "right"
+    设计原则：
+    1) 通用 GalaxeaArmEnv 不再持有任务级 reset 逻辑
+    2) 具体任务在 config + wrapper 里定义：
        - RESET_POSE
+       - RESET_GRIPPER
+       - RESET_TIMEOUT_SEC
+       - RANDOM_RESET / RANDOM_XY_RANGE
+    3) reset 时夹爪是否张开、张开多少，由任务 config 决定
     """
 
     def __init__(self, config=None, use_vr=True, **kwargs):
@@ -55,8 +53,18 @@ class GalaxeaUSBEnv(GalaxeaArmEnv):
         self.config = config
         self.use_vr = use_vr
 
-        # 单臂 reset 位姿
+        # ==========================================================
+        # 任务级 reset 配置：全部从 config 读取
+        # ==========================================================
+        if not hasattr(config, "RESET_POSE"):
+            raise AttributeError("GalaxeaUSBEnv 初始化失败：config 缺少 RESET_POSE")
         self.reset_pose = np.array(config.RESET_POSE, dtype=np.float32)
+
+        self.reset_gripper = float(getattr(config, "RESET_GRIPPER", 80.0))
+        self.reset_timeout_sec = float(getattr(config, "RESET_TIMEOUT_SEC", 3.0))
+
+        self.random_reset = bool(getattr(config, "RANDOM_RESET", False))
+        self.random_xy_range = float(getattr(config, "RANDOM_XY_RANGE", 0.0))
 
         # 只有 use_vr=True 时才会用到这些状态
         self.script_control_enabled = False
@@ -94,11 +102,19 @@ class GalaxeaUSBEnv(GalaxeaArmEnv):
             time.sleep(remain)
 
     def _build_reset_target(self):
+        """
+        任务级 reset 目标位姿。
+        目前保留 XY 随机扰动。
+        后续可增加朝向扰动
+        """
         reset_pose = self.reset_pose.copy()
 
-        if getattr(self.config, "RANDOM_RESET", False):
-            xy_range = float(self.config.RANDOM_XY_RANGE)
-            reset_pose[:2] += np.random.uniform(-xy_range, xy_range, (2,))
+        if self.random_reset and self.random_xy_range > 0:
+            reset_pose[:2] += np.random.uniform(
+                -self.random_xy_range,
+                self.random_xy_range,
+                (2,),
+            )
 
         return reset_pose
 
@@ -107,6 +123,10 @@ class GalaxeaUSBEnv(GalaxeaArmEnv):
         两种模式：
         1) use_vr=True：保留 VR 模式切换复位逻辑
         2) use_vr=False：直接发送 ROS 复位轨迹，不等 VR
+
+        注意：
+        - reset 位姿、夹爪值、超时时长都由任务 config 决定
+        - 通用 env 不再参与任务 reset 决策
         """
         print("🤖 [USB Task Single Arm] 正在准备复位...")
 
@@ -115,16 +135,24 @@ class GalaxeaUSBEnv(GalaxeaArmEnv):
         if self.use_vr:
             print("💡 【请按 VR 手柄的 Mode 2 键】切到脚本控制模式（会发送 use_vr_mode=False）")
             self._wait_until_script_control_ready(timeout=15.0)
-            self._wait_extra_after_false(delay=2.0)
+            self._wait_extra_after_false(delay=3.0)
             print("🤖 [USB Task Single Arm] 开始向底层发送复位坐标...")
         else:
             print("🤖 [USB Task Single Arm] 当前为无 VR 模式，直接发送复位轨迹...")
 
-        # 统一 env 在 single 模式下提供 interpolate_move_single
-        self.interpolate_move_single(reset_pose, timeout=3.0, gripper=80.0)
+        # reset 夹爪值现在完全由任务 config 控制
+        self.interpolate_move_single(
+            reset_pose,
+            timeout=self.reset_timeout_sec,
+            gripper=self.reset_gripper,
+        )
         time.sleep(0.5)
 
-        print("✅ 单臂复位坐标发送完毕！")
+        print(
+            f"✅ 单臂复位完成！"
+            f" pose={np.round(reset_pose, 4).tolist()}, "
+            f"gripper={self.reset_gripper}, timeout={self.reset_timeout_sec}"
+        )
 
         if self.use_vr:
             print("💡 【请按 VR 手柄的 Mode 0 键】重新夺回机械臂控制权，开始你的表演！")
@@ -135,7 +163,7 @@ class SingleGripperPenaltyWrapper(gym.Wrapper):
     单臂夹爪惩罚 wrapper。
 
     兼容两种 gripper 语义：
-    1) 标签空间：-1 / +1
+    1) 三值/标签空间：-1 / 0 / +1
     2) 硬件空间：0~30 视为闭合，70~100 视为张开
     """
 
@@ -161,8 +189,8 @@ class SingleGripperPenaltyWrapper(gym.Wrapper):
         """
         统一把输入动作转成“标签语义”：
         - 硬件空间：0~30 -> -1, 70~100 -> +1
-        - 标签空间：原样保留
-        - 中间区：保持原值（通常接近 0）
+        - 三值空间：原样保留
+        - 中间区：通常视为 0 / hold
         """
         cmd = float(cmd)
 
@@ -172,7 +200,7 @@ class SingleGripperPenaltyWrapper(gym.Wrapper):
         if 70.0 <= cmd <= 100.0:
             return 1.0
 
-        # 标签空间（通常本来就在 [-1, 1]）
+        # 三值/标签空间（通常本来就在 [-1, 1]）
         return cmd
 
     def _update_one_side(self, cmd, prev_closed):

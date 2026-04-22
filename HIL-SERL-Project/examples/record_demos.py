@@ -31,18 +31,21 @@
 # python record_demos.py --successes_needed=2 --max_episode_steps=200
 
 
-#过滤静止帧再保存demos（ros2 topic echo /motion_control/pose_ee_arm_right可以确认vr暂停后数值不会变化，所以可以视为静止帧 ）
+#不过滤静止帧再保存demos（ros2 topic echo /motion_control/pose_ee_arm_right可以确认vr暂停后数值不会变化，所以可以视为静止帧 ）
 #（可以回放录制的demos，看看动作是不是流畅的）
 
 #录制的action【6】官方代表持续的张开/闭合命令，我们修改自己的情况，让其符合想闭合就显示一直闭合，想张开就一直张开的情况
 
+##和官方一致
+#不过滤静止帧，防止最后成功时被判定到静止帧范围从而demos不完整
+#三值夹爪标签(可视化demos来判断是否准确实现）
 
 import os
 import sys
 import time
 
 # ==============================================================
-# 🔥 像 actor 一样，先强制本地 CPU，避免 classifier=True 时本地环境炸
+# 像 actor 一样，先强制本地 CPU，避免 classifier=True 时本地环境炸
 # ==============================================================
 os.environ["JAX_PLATFORMS"] = "cpu"
 os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -56,7 +59,7 @@ import datetime
 from absl import app, flags
 
 # ==============================================================
-# 🔥 核心路径配置（确保模块可被正确导入）
+# 核心路径配置（确保模块可被正确导入）
 # ==============================================================
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
@@ -65,7 +68,7 @@ if PROJECT_ROOT not in sys.path:
 from examples.galaxea_task.usb_pick_insertion_single.config import env_config
 
 # ==============================================================
-# ⚙️ 命令行参数配置
+# 命令行参数配置
 # ==============================================================
 FLAGS = flags.FLAGS
 flags.DEFINE_string(
@@ -99,6 +102,12 @@ flags.DEFINE_boolean(
     "Whether to manually confirm success even when classifier says succeed=True.",
 )
 
+# ==============================================================
+# 夹爪反馈阈值
+# ==============================================================
+CLOSE_MAX = 30.0
+OPEN_MIN = 70.0
+
 
 def ask_success_from_terminal():
     while True:
@@ -118,13 +127,19 @@ def extract_gripper_feedback(obs):
     1) state 是 dict，含 right_gripper / gripper
     2) state 是 ndarray，单臂常见最后一维为 gripper
     """
-    if "state" not in obs:
+    if obs is None or "state" not in obs:
         return None
 
     state = obs["state"]
 
     if isinstance(state, dict):
-        for key in ["right_gripper", "left_gripper", "gripper", "state/right_gripper", "state/left_gripper"]:
+        for key in [
+            "right_gripper",
+            "left_gripper",
+            "gripper",
+            "state/right_gripper",
+            "state/left_gripper",
+        ]:
             if key in state:
                 arr = np.asarray(state[key]).reshape(-1)
                 if arr.size > 0:
@@ -135,6 +150,7 @@ def extract_gripper_feedback(obs):
                 arr = np.asarray(val).reshape(-1)
                 if arr.size > 0:
                     return float(arr[-1])
+
         return None
 
     arr = np.asarray(state)
@@ -147,61 +163,82 @@ def extract_gripper_feedback(obs):
     return float(arr[-1])
 
 
-def infer_gripper_label_from_feedback(
+def infer_stable_gripper_state_from_feedback(
     gripper_feedback,
-    prev_label,
-    raw_action_gripper=None,
-    close_max=30.0,
-    open_min=70.0,
+    prev_state,
+    close_max=CLOSE_MAX,
+    open_min=OPEN_MIN,
 ):
     """
-    按你的规则：
-      0~30   -> 闭合标签 -1.0
-      70~100 -> 张开标签 +1.0
-      中间区 -> 保持上一标签
-    如果上一标签也没有，则回退到 raw_action_gripper 或按 50 分界。
+    将反馈量程映射为稳定夹爪状态：
+      -1 -> 当前稳定为闭合
+      +1 -> 当前稳定为张开
+      中间区 -> 保持上一稳定状态
     """
     if gripper_feedback is None:
-        if prev_label is not None:
-            return float(prev_label)
-        if raw_action_gripper is not None:
-            return -1.0 if float(raw_action_gripper) < 0 else 1.0
-        return 1.0
+        return prev_state
 
     x = float(gripper_feedback)
 
     if x <= close_max:
-        return -1.0
+        return -1
     if x >= open_min:
-        return 1.0
+        return +1
 
-    if prev_label is not None:
-        return float(prev_label)
-
-    if raw_action_gripper is not None:
-        return -1.0 if float(raw_action_gripper) < 0 else 1.0
-
-    return -1.0 if x < 50.0 else 1.0
+    return prev_state
 
 
-def rewrite_gripper_action_with_feedback(action, next_obs, prev_label):
+def rewrite_gripper_action_to_official_style(
+    action,
+    obs,
+    next_obs,
+    prev_stable_state,
+):
     """
-    用 next_obs 里的夹爪反馈，反推这一帧应保存的夹爪训练标签。
-    只改 action[6]，其他维保持不变。
+    把夹爪最后一维改写成更接近官网的结构：
+      -1 = close event
+       0 = hold / no-op
+      +1 = open event
+
+    这里不是保存“当前夹爪状态”，而是保存“这一帧是否发生了开/关事件”。
+
+    推断方式：
+    1) 从 obs 与 next_obs 读取夹爪反馈量程
+    2) 先推断前后两帧的稳定夹爪状态
+    3) 若发生 OPEN->CLOSED，则记 -1
+       若发生 CLOSED->OPEN，则记 +1
+       否则记 0
     """
     action = np.asarray(action, dtype=np.float32).copy()
 
     if action.shape[0] != 7:
-        return action, prev_label
+        return action, prev_stable_state
 
-    feedback = extract_gripper_feedback(next_obs)
-    new_label = infer_gripper_label_from_feedback(
-        gripper_feedback=feedback,
-        prev_label=prev_label,
-        raw_action_gripper=action[6],
+    prev_feedback = extract_gripper_feedback(obs)
+    next_feedback = extract_gripper_feedback(next_obs)
+
+    prev_state = infer_stable_gripper_state_from_feedback(
+        prev_feedback,
+        prev_stable_state,
     )
-    action[6] = new_label
-    return action, new_label
+    next_state = infer_stable_gripper_state_from_feedback(
+        next_feedback,
+        prev_state,
+    )
+
+    gripper_event = 0.0
+    if prev_state is not None and next_state is not None:
+        if prev_state == +1 and next_state == -1:
+            gripper_event = -1.0  # close
+        elif prev_state == -1 and next_state == +1:
+            gripper_event = +1.0  # open
+        else:
+            gripper_event = 0.0   # hold
+    else:
+        gripper_event = 0.0
+
+    action[6] = np.float32(gripper_event)
+    return action, next_state
 
 
 def build_safe_idle_action(action_shape):
@@ -212,8 +249,7 @@ def build_safe_idle_action(action_shape):
     """
     safe_idle_action = np.zeros(action_shape, dtype=np.float32)
     if safe_idle_action.shape[0] == 7:
-        # 这里用你当前假定的安全保持值；若实测不对，改这里
-        # 在非 reset 的正常 step 阶段，默认持续给夹爪发送 80.0。
+        # 正常 step 阶段默认持续给夹爪发送保持值
         safe_idle_action[6] = 80.0
     return safe_idle_action
 
@@ -224,11 +260,12 @@ def main(_):
     print("📌 当前脚本策略：")
     print("   - classifier=True 时：成功由 reward ckpt 在成功瞬间触发。")
     print("   - max_episode_steps 只做失败/超时兜底。")
-    print("   - 默认不再发送全 0 动作，而是发送安全空动作。")
-    print("   - 夹爪标签不再保存瞬时按钮命令，而是由反馈量程反推：")
-    print("       0~30   -> 闭合(-1)")
-    print("       70~100 -> 张开(+1)")
-    print("       中间区 -> 保持上一标签\n")
+    print("   - 全程轨迹完整保留，不删除静止帧。")
+    print("   - 夹爪最后一维改成官网风格三值动作：")
+    print("       -1 -> close event")
+    print("        0 -> hold / no-op")
+    print("       +1 -> open event")
+    print("   - 三值不是按钮原样存，而是由前后帧夹爪反馈量程变化推断。\n")
 
     env = env_config.get_environment(
         fake_env=False,
@@ -252,17 +289,18 @@ def main(_):
     returns = 0.0
     episode_step = 0
 
-    # 当前 episode 的夹爪稳定标签
-    prev_gripper_label = None
+    # 当前 episode 的稳定夹爪状态：
+    #   -1 closed, +1 open, None unknown
+    stable_gripper_state = None
 
     while success_count < success_needed:
-
         base_env = env.unwrapped
 
         # 非 reset 阶段，如果还在 Mode 2，就什么都不发，只等待切回 Mode 0
         if getattr(base_env, "script_control_enabled", False):
             time.sleep(0.05)
             continue
+
         # 默认执行固定“安全空动作”
         exec_action = safe_idle_action.copy()
 
@@ -273,20 +311,19 @@ def main(_):
         # ------------------------------------------------------
         # 记录逻辑：
         # - 有 VR 接管：记录 intervene_action
-        # - 无 VR 接管：这一帧视为静止/空闲帧，不录
+        # - 无 VR 接管：记录零动作/空闲帧
         # ------------------------------------------------------
         if "intervene_action" in info:
             raw_actions = np.asarray(info["intervene_action"], dtype=np.float32)
-            is_static = np.allclose(raw_actions, 0.0, atol=1e-8)
         else:
             raw_actions = np.zeros(env.action_space.shape, dtype=np.float32)
-            is_static = True
 
-        # 用夹爪反馈量程反推 gripper 训练标签
-        actions, prev_gripper_label = rewrite_gripper_action_with_feedback(
+        # 改写夹爪最后一维为官网式三值动作
+        actions, stable_gripper_state = rewrite_gripper_action_to_official_style(
             raw_actions,
+            obs,
             next_obs,
-            prev_gripper_label,
+            stable_gripper_state,
         )
 
         forced_timeout = False
@@ -305,12 +342,11 @@ def main(_):
                 rewards=float(rew),
                 masks=1.0 - float(episode_end),
                 dones=episode_end,
-                infos=info,
+                infos=copy.deepcopy(info),
             )
         )
 
-        if not is_static:
-            trajectory.append(transition)
+        trajectory.append(transition)
 
         pbar.set_description(
             f"成功 Demo 数: {success_count}/{success_needed} | "
@@ -334,13 +370,18 @@ def main(_):
                 if len(trajectory) > 0:
                     trajectory[-1]["infos"] = copy.deepcopy(info)
                     trajectory[-1]["infos"]["succeed"] = succeed
+                    trajectory[-1]["dones"] = True
+                    trajectory[-1]["masks"] = 0.0
             else:
                 print("📝 当前 classifier=False，使用人工判定 success / fail。")
                 succeed = ask_success_from_terminal()
+
                 if len(trajectory) > 0:
                     trajectory[-1]["infos"] = copy.deepcopy(info)
                     trajectory[-1]["infos"]["succeed"] = succeed
                     trajectory[-1]["rewards"] = float(succeed)
+                    trajectory[-1]["dones"] = True
+                    trajectory[-1]["masks"] = 0.0
 
             if succeed and len(trajectory) > 0:
                 for trans in trajectory:
@@ -348,16 +389,26 @@ def main(_):
                 success_count += 1
                 pbar.update(1)
 
-                print(f"🎉 成功录制 1 条 Demo！当前累计成功条数: {success_count}")
-                print(f"🎉 剔除静止帧后，纯净序列长度: {len(trajectory)}")
-                print(f"📦 本条轨迹长度: {len(trajectory)}")
+                # 打印一下这一条里 gripper 三值统计，方便你核对结构
+                traj_actions = np.asarray([t["actions"] for t in trajectory], dtype=np.float32)
+                if traj_actions.ndim == 2 and traj_actions.shape[1] == 7:
+                    g = traj_actions[:, 6]
+                    n_close = int(np.sum(g < -0.5))
+                    n_open = int(np.sum(g > 0.5))
+                    n_hold = int(np.sum(np.abs(g) <= 0.5))
+                    print(f"🎉 成功录制 1 条 Demo！当前累计成功条数: {success_count}")
+                    print(f"📦 本条完整轨迹长度: {len(trajectory)}")
+                    print(f"🤏 gripper统计: close={n_close}, hold={n_hold}, open={n_open}")
+                else:
+                    print(f"🎉 成功录制 1 条 Demo！当前累计成功条数: {success_count}")
+                    print(f"📦 本条完整轨迹长度: {len(trajectory)}")
             else:
-                print("❌ 当前回合失败，或没有有效操作帧，已丢弃该轨迹。")
+                print("❌ 当前回合失败，已丢弃该轨迹。")
 
             trajectory = []
             returns = 0.0
             episode_step = 0
-            prev_gripper_label = None
+            stable_gripper_state = None
 
             if success_count >= success_needed:
                 break
@@ -373,7 +424,7 @@ def main(_):
     uuid = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     file_name = os.path.join(
         save_dir,
-        f"{FLAGS.exp_name}_{success_needed}_demos_{uuid}.pkl",
+        f"{FLAGS.exp_name}_{success_needed}_demos_official_style_{uuid}.pkl",
     )
 
     with open(file_name, "wb") as f:
@@ -385,209 +436,3 @@ def main(_):
 
 if __name__ == "__main__":
     app.run(main)
-
-
-
-
-# import os
-# import sys
-# from tqdm import tqdm
-# import numpy as np
-# import copy
-# import pickle as pkl
-# import datetime
-# from absl import app, flags
-
-
-# # ==============================================================
-# # 🔥 核心路径配置（确保模块可被正确导入）
-# # ==============================================================
-# PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-# if PROJECT_ROOT not in sys.path:
-#     sys.path.append(PROJECT_ROOT)
-
-# # 导入你任务定制的环境构建函数
-# #from examples.galaxea_task.usb_pick_insertion.config import env_config
-# from examples.galaxea_task.usb_pick_insertion_single.config import env_config
-
-# # ==============================================================
-# # ⚙️ 命令行参数配置
-# # ==============================================================
-# FLAGS = flags.FLAGS
-# flags.DEFINE_string(
-#     "exp_name",
-#     "galaxea_usb_insertion_single",
-#     "Name of experiment corresponding to folder.",
-# )
-# flags.DEFINE_integer(
-#     "successes_needed",
-#     20,
-#     "Number of successful demos to collect.",
-# )
-# flags.DEFINE_integer(
-#     "max_episode_steps",
-#     650,
-#     "Maximum number of steps per demo episode before forcing truncation.",
-# )
-
-
-# def ask_success_from_terminal():
-#     """人工输入本回合成功/失败。1=成功，0=失败。"""
-#     while True:
-#         try:
-#             manual_rew = int(input("Success? (1/0): ").strip())
-#             if manual_rew in [0, 1]:
-#                 return bool(manual_rew)
-#             print("❌ 请输入 1 或 0。")
-#         except ValueError:
-#             print("❌ 输入无效，请输入 1 或 0。")
-
-
-# def main(_):
-#     print(f"🚀 开始录制专家数据：{FLAGS.exp_name}")
-
-#     # ==========================================================
-#     # 🌍 实例化真实环境
-#     # ==========================================================
-#     # 录制专家演示阶段：
-#     # - 真实环境
-#     # - 使用人工成功/失败打分
-#     env = env_config.get_environment(
-#         fake_env=False,
-#         save_video=False,
-#         classifier=True,# False,#True,#  #应该主动打开奖励分类器，最大步长设置为最低底线，不能当最优先的demos判定基准
-#     )
-
-#     obs, info = env.reset()
-#     print("✅ 环境重置完成，请戴上 VR 头显准备接管！")
-
-#     transitions = []
-#     success_count = 0
-#     success_needed = FLAGS.successes_needed
-#     max_episode_steps = FLAGS.max_episode_steps
-
-#     pbar = tqdm(total=success_needed, desc="成功收集的 Demo 数量")
-
-#     # 当前回合的完整轨迹（官方逻辑：整条成功回合全保存）
-#     trajectory = []
-#     returns = 0.0
-#     episode_step = 0
-
-#     while success_count < success_needed:
-#         # 官方逻辑：默认零动作，如果有 intervene_action 再覆盖
-#         actions = np.zeros(env.action_space.shape, dtype=np.float32)
-
-#         next_obs, rew, done, truncated, info = env.step(actions)
-#         returns += rew
-#         episode_step += 1
-
-#         if "intervene_action" in info:
-#             actions = np.asarray(info["intervene_action"], dtype=np.float32)
-
-#         # ==========================================================
-#         # ⏰ 超时截断保护
-#         # ==========================================================
-#         forced_timeout = False
-#         if episode_step >= max_episode_steps and not (done or truncated):
-#             forced_timeout = True
-#             truncated = True
-#             print(f"\n⏰ 达到最大录制时长：{max_episode_steps} 步，强制截断当前回合。")
-
-#         episode_end = bool(done or truncated)
-
-#         transition = copy.deepcopy(
-#             dict(
-#                 observations=obs,
-#                 actions=actions,
-#                 next_observations=next_obs,
-#                 rewards=rew,
-#                 masks=1.0 - float(episode_end),
-#                 dones=episode_end,
-#                 infos=info,
-#             )
-#         )
-
-#         is_static = np.allclose(actions, 0.0, atol=1e-8)
-
-#         #只保留真正有动作的帧，去掉静止帧，回放demos确定数据是纯净的
-#         if not is_static:
-#             trajectory.append(transition)
-
-#         pbar.set_description(
-#             f"成功 Demo 数: {success_count}/{success_needed} | "
-#             f"Return: {returns:.2f} | "
-#             f"Step: {episode_step}/{max_episode_steps}"
-#         )
-
-#         obs = next_obs
-
-#         if episode_end:
-#             print("\n🔄 回合结束。")
-
-#             # ======================================================
-#             # ✅ 人工 success/fail 判定补丁
-#             # ======================================================
-#             # 1) 正常 done 时，底层 use_manual_reward=True 通常会给 info["succeed"]
-#             # 2) 但如果是我们这里强制 timeout 截断，或者底层没给 succeed，
-#             #    就在顶层补一次人工输入
-#             if "succeed" not in info or forced_timeout or truncated:
-#                 print("📝 当前回合需要人工判定 success / fail。")
-#                 info["succeed"] = ask_success_from_terminal()
-
-#                 # 同步回写最后一帧 transition 的 infos，保证保存的数据一致
-#                 if len(trajectory) > 0:
-#                     trajectory[-1]["infos"] = copy.deepcopy(info)
-
-#                     #不使用classifier=True，仅想跑通demos录制脚本时使用
-#                     #trajectory[-1]["rewards"] = float(info["succeed"])
-
-#             # 官方逻辑：只要这个回合 succeed，就把整条轨迹全存下来
-#             if info.get("succeed", False) and len(trajectory)> 0:
-#                 for trans in trajectory:
-#                     transitions.append(copy.deepcopy(trans))
-#                 success_count += 1
-#                 pbar.update(1)
-#                 print(f"🎉 成功录制 1 条 Demo！当前累计成功条数: {success_count}")
-#                 print(f"🎉 剔除静止帧后，纯净序列长度: {len(trajectory)}")
-
-#                 print(f"📦 本条轨迹长度: {len(trajectory)}")
-#             else:
-#                 print("❌ 当前回合失败，或没有有效操作帧，已丢弃该轨迹。")
-
-#             # 清空当前回合缓存
-#             trajectory = []
-#             returns = 0.0
-#             episode_step = 0
-
-#             # 如果已经够了，就不要再多 reset 一次
-#             if success_count >= success_needed:
-#                 break
-
-#             print("🔄 正在复位机器人...")
-#             obs, info = env.reset()
-#             print("✅ 复位完成，可进行下一次演示。\n" + "-" * 40)
-
-#     # ==========================================================
-#     # 💾 保存数据
-#     # ==========================================================
-#     save_dir = os.path.join(os.path.dirname(__file__), "demo_data_single")
-#     os.makedirs(save_dir, exist_ok=True)
-
-#     uuid = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-#     file_name = os.path.join(
-#         save_dir,
-#         f"{FLAGS.exp_name}_{success_needed}_demos_{uuid}.pkl",
-#     )
-
-#     with open(file_name, "wb") as f:
-#         pkl.dump(transitions, f)
-
-#     print(f"\n💾 恭喜！成功保存 {success_needed} 条 Demo 数据至 {file_name}")
-#     print(f"📊 总 transition 数量: {len(transitions)}")
-
-
-# if __name__ == "__main__":
-#     app.run(main)
-
-
-
