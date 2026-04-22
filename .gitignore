@@ -46,3 +46,4 @@ examples/classifier_data/*
 examples/classifier_ckpt/*
 !examples/classifier_ckpt/.gitkeep
 
+HIL-SERL-Project/examples/src/serl-launcher/
