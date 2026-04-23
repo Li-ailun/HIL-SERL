@@ -37,6 +37,8 @@
 #     （4）模型并没有把 actions 喂进分类器去算 loss。actions 
 #     （5）主要只是为了让 transition 结构完整，能插入 ReplayBuffer。
 #     我把 env.action_space.sample() 改成全零动作，对当前 reward classifier 训练基本没影响（因为新代码也没有真正训练动作）
+
+
 import os
 import sys
 import glob
@@ -238,7 +240,11 @@ def main(_):
     classifier = jax_utils.replicate(classifier)
 
     def data_augmentation_fn(rng, observations):
-        """这里输入是单个 device 上的 local batch，所以 num_batch_dims=1。"""
+        """
+        虽然已经 pmap 到单个 device，
+        但图像张量仍然是 [local_B, 1, H, W, C]，
+        所以这里仍然需要 num_batch_dims=2。
+        """
         for pixel_key in config.classifier_keys:
             rng, crop_key = jax.random.split(rng)
             observations = observations.copy(
@@ -247,7 +253,7 @@ def main(_):
                         observations[pixel_key],
                         crop_key,
                         padding=4,
-                        num_batch_dims=1,
+                        num_batch_dims=2,
                     )
                 }
             )

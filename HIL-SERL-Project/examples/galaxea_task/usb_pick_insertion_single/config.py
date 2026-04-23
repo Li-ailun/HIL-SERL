@@ -151,7 +151,7 @@ class GalaxeaUSBEnvConfig:
     # ==============================
     HZ = 15
     DISPLAY_IMAGES = True
-    MAX_EPISODE_LENGTH = 1500
+    MAX_EPISODE_LENGTH = 250
 
     # ==============================
     # 3. 图像 / 显示配置
@@ -268,12 +268,12 @@ class GalaxeaUSBTrainConfig(DefaultTrainingConfig):
     # 9. 观测 / 编码配置
     # ==============================
     #RL 训练主输入看 image_keys，但不决定demos录制用这几个录制
-    image_keys: List[str] = ["head_rgb", "right_wrist_rgb"]
+    image_keys: List[str] = ["head_rgb", "left_wrist_rgb","right_wrist_rgb"]
 
     # 单臂右臂任务更建议分类器关注 head + right wrist
     # 奖励分类器看 classifier_keys，奖励分类只看如下图像，但是不决定录制数据用这几个图像采集
     # classifier_keys: List[str] = ["head_rgb", "left_wrist_rgb", "right_wrist_rgb"]
-    classifier_keys: List[str] = ["head_rgb", "left_wrist_rgb"]
+    classifier_keys: List[str] = ["head_rgb", "left_wrist_rgb","right_wrist_rgb"]
     # classifier_keys: List[str] = ["left_wrist_rgb"]
     proprio_keys: List[str] = [
         "right_ee_pose",

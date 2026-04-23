@@ -150,7 +150,7 @@ classifier_stages = [
 rsync -avz -e "ssh -p 2122" demo_data_single \
 lixiang@service.qich.top:/home/hddData/User/lixiang/hilserl_workspace/HIL-SERL-Project/examples/
 
-rsync -avz -e "ssh -p 2122" classifier_data_single \
+rsync -avz -e "ssh -p 2122" classifier_ckpt_single \
 lixiang@service.qich.top:/home/hddData/User/lixiang/hilserl_workspace/HIL-SERL-Project/examples/
 
 
