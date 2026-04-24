@@ -1,8 +1,5 @@
 # 运行方式：
 
-# cd /home/eren/HIL-SERL/HIL-SERL-Project/examples/demo_data_single
-# python inspect_demo_pkl.py
-
 # 第一种，指定 demo 目录：
 
 # cd /home/eren/HIL-SERL/HIL-SERL-Project/examples/inspect

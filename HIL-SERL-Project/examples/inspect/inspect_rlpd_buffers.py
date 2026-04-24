@@ -1,7 +1,7 @@
 # 运行方式：
 
 # cd /home/eren/HIL-SERL/HIL-SERL-Project/examples
-# python inspect_rlpd_buffers.py --root ./rlpd_checkpoints_single --which latest
+# python inspect/inspect_rlpd_buffers.py --root ./rlpd_checkpoints_single --which latest
 
 # 如果你想看所有保存过的 pkl 合并后的统计：
 
