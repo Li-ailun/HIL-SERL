@@ -105,11 +105,14 @@ class MultiCameraBinaryRewardClassifierWrapper(gym.Wrapper):
         obs, rew, done, truncated, info = self.env.step(action)
         
         # 2. 视觉模型基于最新状态打分
-        rew = self.compute_reward(obs)
-        
-        # 3. 核心逻辑：如果视觉模型认为任务已经成功 (rew==1)，则强制结束当前回合
-        done = done or rew
-        info['succeed'] = bool(rew)
+        rew = int(self.compute_reward(obs))
+        success = bool(rew)
+
+        done = bool(done or success)
+
+        info["succeed"] = success
+        info["success"] = success
+        info["is_success"] = success
         
         # 4. 频率控制锁：如果执行太快，强制 sleep 补足时间差，确保控制频率恒定
         if self.target_hz is not None:
@@ -120,6 +123,8 @@ class MultiCameraBinaryRewardClassifierWrapper(gym.Wrapper):
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
         info['succeed'] = False
+        info["success"] = False
+        info["is_success"] = False
         return obs, info
 
 

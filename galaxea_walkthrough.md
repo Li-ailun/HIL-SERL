@@ -299,3 +299,21 @@ env.step(actions)（零增量的意思）
 
 测试结果（+-1归一化+位置0.01+旋转0.05的缩放）：最终判断是：
   归一化到缩放这条链没大问题，特别是 x 和 rx/ry/rz 已经验证得很漂亮；但在你这个 reset 姿态附近，y、z 方向的真实执行有明显耦合和方向不对称，尤其正方向更明显。
+
+
+  ###
+  ###
+  ###
+
+  ###############################知识十（存入的buffer和demo_buffer数据分析）
+
+  buffer 输出说明三件事：
+
+reward / done / mask 存储是对的
+所以 return=1 的成功 transition 没丢。
+success=0 是日志/info 字段没统一，不是 reward 没触发。
+夹爪三值存储是对的，但前 6 维动作存在超过 [-1,1] 的问题，需要在 actor 存 buffer 前 clip。
+
+你现在最应该立刻修的是：
+
+success 字段统一 + stored_actions[:6] clip 到 [-1,1]
