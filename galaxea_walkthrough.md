@@ -479,7 +479,39 @@ POS_SCALE/ROT_SCALE 是环境语义，必须固定；它和官网不同没问题
           但不能无脑过滤全部静止帧。
            你应该至少保留 reward=1 和 done=True 的静止帧，
                 否则可能删掉最关键的成功终止数据。
-                
+
 2. ✅ wrapper 里的 grasp_penalty 是否只写 info、不改 reward  
 3. ✅ env.step 内部是否正确把 -1/0/+1 夹爪标签映射到硬件 10/保持/80
 4. ✅ （抓镊子后保持量程20,算闭合）CLOSE_MAX=30 / OPEN_MIN=70 是否适合真实夹持反馈
+
+
+
+####
+####
+####
+
+
+###########################目前我认为的进度
+
+是的，我现在的判断是：你前面列出的那些“框架级问题”，基本都已经符合要求了。
+
+具体说：
+
+RLPD 数据链路是对的：你的最新 train_rlpd.py 已经有 actor→learner 图像裁剪、动作归一化、在线夹爪三值事件重写、demo/buffer 加载前 action sanitize，这些都符合我们前面定下的设计。
+demos 录制脚本不再过滤静止帧：它是“第一次 VR 接管后才开始记录”，开始记录后即使没有接管，也会保留零动作/hold 帧，这符合你要的完整演示轨迹逻辑。
+RLPD 没有调用 config 里的 process_demos() 静止帧过滤：也就是说 config 里那段过滤逻辑目前不会影响 learner 加载 demo。你的 RLPD 是自己读取 pkl、sanitize、prune、再 insert 到 demo_buffer。
+grasp_penalty 已经改成只写 info，不改主 reward：你的 SingleGripperPenaltyWrapper 里现在是 info["grasp_penalty"] = float(penalty_val)，最后返回原始 reward，没有再 reward += penalty_val。这符合官网 learned-gripper 的分支惩罚思想。
+config 的相机分工也合理：ENV_IMAGE_KEYS 打开三路，image_keys=["head_rgb", "right_wrist_rgb"] 给 RLPD policy，classifier_keys=["left_wrist_rgb"] 给奖励分类器，环境组装时也是先加载 classifier wrapper，再加 gripper penalty wrapper。
+
+所以现在不是“框架还有明显错误”的阶段了，而是进入了训练效果调参阶段。
+
+后面主要看这些细节：
+
+1. reward classifier 是否稳定、阈值 0.7 是否合适
+2. demos 质量是否足够，动作是否太饱和、太快或成功样本太少（不要让归一化动作一直输出1这种，）
+3. CLOSE_MAX=30 / OPEN_MIN=70 是否覆盖真实夹持反馈（该次任务符合）
+4. POS_SCALE / ROT_SCALE 是否让策略动作既够细又不太慢（调试脚本是符合，训练还需感受）
+5. 左腕单相机作为 reward 判断是否有误判角度  （目前没有，如果多次出现，可以增加成功附近的状态重新训练）
+6. RLPD 中 online 数据和 demo 数据比例、训练 loss、grasp_critic loss 是否正常
+
+一句话：现在整体框架我认为已经没有明显结构性问题了，剩下主要就是训练效果、数据质量、阈值和超参数的细节优化。
