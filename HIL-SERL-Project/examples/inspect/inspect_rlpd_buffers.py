@@ -5,7 +5,8 @@
 
 # 如果你想看所有保存过的 pkl 合并后的统计：
 
-# python inspect_rlpd_buffers.py --root ./rlpd_checkpoints_single --which all
+# (cd inspect)python inspect_rlpd_buffers.py --root ../rlpd_checkpoints_single --which all
+# (cd example)python inspect/inspect_rlpd_buffers.py   --root ./rlpd_checkpoints_single   --which all
 
 # 如果还想保存成 CSV：
 
