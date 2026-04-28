@@ -191,7 +191,7 @@ class GalaxeaUSBEnvConfig:
     }
 
     HEAD_CAMERA = {
-        "device_index": 2,   # 用 v4l2-ctl --list-devices 查询
+        "device_index": 6,   # 用 v4l2-ctl --list-devices 查询
         "api": cv2.CAP_V4L2,
         "fourcc": "MJPG",
         "frame_width": 1344,
@@ -201,12 +201,42 @@ class GalaxeaUSBEnvConfig:
         "split_left_half": True,
     }
 
-    # ==============================
+        # ==============================
     # 5. 动作缩放
     # ==============================
     POS_SCALE = 0.018  # 0.018 m
-    ROT_SCALE = 0.01   # 0.052 rad
+    ROT_SCALE = 0.05   # 0.05 rad
+    # 夹爪不缩放：action[6] 只表示事件语义
+    #   -1 -> close
+    #    0 -> hold
+    #   +1 -> open
+
+    # ==============================
+    # 5.1 夹爪硬件命令 / feedback 阈值
+    # ==============================
+    # 真实发给 R1 PRO gripper 的硬件量程
+    GRIPPER_CLOSE_CMD = 10.0
+    GRIPPER_OPEN_CMD = 80.0
+
+    # feedback 只用于判断状态，不直接作为 hold 命令
+    # <= 30 认为稳定闭合；>= 70 认为稳定张开；中间区不更新 hold memory
+    GRIPPER_FEEDBACK_CLOSE_MAX = 30.0
+    GRIPPER_FEEDBACK_OPEN_MIN = 70.0
+
+    #hold期间，持续发送x帧变化的标签
+    #设置成0也可以，更不会影响actor输出动作的夹爪跳变(上一明确目标命令记忆”机制)
+    GRIPPER_CLOSE_LATCH_STEPS = 0
+    GRIPPER_OPEN_LATCH_STEPS = 0
+
+# 关键：不要让 feedback 在 close 刚开始时把 memory 覆盖回 open
+    GRIPPER_FEEDBACK_SYNC_MEMORY = False
+
+# 如果 feedback 已经确认闭合/张开，可以提前结束 latch；
+# 但 desired command 仍保持 close/open，不会反向覆盖。
+    GRIPPER_LATCH_RELEASE_ON_FEEDBACK = True
     #夹爪不缩放，我和官方都是手臂和夹爪先clip，然后手臂缩放，夹爪直接action【6】映射成标签对应的夹爪动作
+
+
 
     # ==============================
     # 6. 安全工作空间限位
