@@ -162,6 +162,17 @@ PUBLISH_NETWORK_AFTER_WARMUP = True
 DEFAULT_WARMUP_PUBLISH_PERIOD_S = 5
 
 # ---- learner 终端训练指标打印配置 ----
+# ---- WandB 额外诊断图表 ----
+LOG_EXTRA_WANDB_DIAGNOSTICS = True
+
+# actor step 级别诊断：跟随 config.log_period 发送，不是每步发送
+LOG_ACTOR_STEP_DIAGNOSTICS = True
+
+# episode 级别诊断：每个 episode 结束发送一次
+LOG_ACTOR_EPISODE_DIAGNOSTICS = True
+
+# rolling 成功率窗口
+WANDB_EPISODE_ROLLING_WINDOW = 10
 PRINT_LEARNER_TRAIN_DEBUG = True
 PRINT_LEARNER_TRAIN_DEBUG_EVERY_LOG_PERIOD = True
 
@@ -1117,16 +1128,78 @@ def _extract_episode_debug_info(info):
 # 9. learner terminal metric helpers
 # =============================================================================
 
-def _fmt_metric(info, key, default=None):
-    if info is None or key not in info:
-        return default
+def _first_not_none(*values):
+    """返回第一个不是 None 的值。注意 0.0 是合法值，不能被 or 吃掉。"""
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
+def _get_nested_metric(info, key):
+    """
+    支持两种形式：
+    1) flat key:
+       info["critic/critic_loss"]
+
+    2) nested key:
+       info["critic"]["critic_loss"]
+
+    key 仍然写成 "critic/critic_loss"。
+    """
+    if info is None:
+        return None
+
+    # 先尝试 flat key
     try:
-        x = np.asarray(jax.device_get(info[key]))
+        if key in info:
+            return info[key]
+    except Exception:
+        pass
+
+    # 再尝试 nested key
+    try:
+        cur = info
+        for part in str(key).split("/"):
+            if isinstance(cur, dict) and part in cur:
+                cur = cur[part]
+            else:
+                return None
+        return cur
+    except Exception:
+        return None
+
+
+def _fmt_metric(info, key, default=None):
+    value = _get_nested_metric(info, key)
+    if value is None:
+        return default
+
+    try:
+        x = np.asarray(jax.device_get(value))
         if x.size == 0:
             return default
         return float(x.reshape(-1)[0])
     except Exception:
         return default
+
+
+def _fmt_metric_any(update_info, critics_info, keys, default=None):
+    """
+    从 update_info 和 critics_info 里按多个候选 key 查找。
+    这样即使 SERL / agent 返回的 key 名略有不同，也能尽量取到。
+    """
+    for key in keys:
+        v = _fmt_metric(update_info, key, None)
+        if v is not None:
+            return v
+
+    for key in keys:
+        v = _fmt_metric(critics_info, key, None)
+        if v is not None:
+            return v
+
+    return default
 
 
 def _format_metric_value(x, digits=6):
@@ -1142,38 +1215,151 @@ def _print_learner_training_debug(step, update_info, critics_info, timer):
     if not PRINT_LEARNER_TRAIN_DEBUG:
         return
 
-    critic_loss = _fmt_metric(update_info, "critic/critic_loss") or _fmt_metric(critics_info, "critic/critic_loss")
-    predicted_qs = _fmt_metric(update_info, "critic/predicted_qs") or _fmt_metric(critics_info, "critic/predicted_qs")
-    target_qs = _fmt_metric(update_info, "critic/target_qs") or _fmt_metric(critics_info, "critic/target_qs")
-    rewards = _fmt_metric(update_info, "critic/rewards") or _fmt_metric(critics_info, "critic/rewards")
+    # critic
+    critic_loss = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "critic/critic_loss",
+            "critic/loss",
+            "critic_loss",
+            "loss/critic",
+        ],
+    )
+    predicted_qs = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "critic/predicted_qs",
+            "critic/predicted_q",
+            "critic/q",
+            "critic/qs",
+            "predicted_qs",
+        ],
+    )
+    target_qs = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "critic/target_qs",
+            "critic/target_q",
+            "target_qs",
+        ],
+    )
+    rewards = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "critic/rewards",
+            "critic/reward",
+            "rewards",
+            "reward",
+        ],
+    )
 
-    grasp_loss = _fmt_metric(update_info, "grasp_critic/grasp_critic_loss") or _fmt_metric(critics_info, "grasp_critic/grasp_critic_loss")
-    grasp_pred_q = _fmt_metric(update_info, "grasp_critic/predicted_grasp_qs") or _fmt_metric(critics_info, "grasp_critic/predicted_grasp_qs")
-    grasp_target_q = _fmt_metric(update_info, "grasp_critic/target_grasp_qs") or _fmt_metric(critics_info, "grasp_critic/target_grasp_qs")
-    grasp_rewards = _fmt_metric(update_info, "grasp_critic/grasp_rewards") or _fmt_metric(critics_info, "grasp_critic/grasp_rewards")
+    # grasp critic
+    grasp_loss = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "grasp_critic/grasp_critic_loss",
+            "grasp_critic/critic_loss",
+            "grasp_critic/loss",
+            "grasp_critic_loss",
+        ],
+    )
+    grasp_pred_q = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "grasp_critic/predicted_grasp_qs",
+            "grasp_critic/predicted_qs",
+            "grasp_critic/predicted_q",
+            "predicted_grasp_qs",
+        ],
+    )
+    grasp_target_q = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "grasp_critic/target_grasp_qs",
+            "grasp_critic/target_qs",
+            "grasp_critic/target_q",
+            "target_grasp_qs",
+        ],
+    )
+    grasp_rewards = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "grasp_critic/grasp_rewards",
+            "grasp_critic/rewards",
+            "grasp_rewards",
+        ],
+    )
 
-    actor_loss = _fmt_metric(update_info, "actor/actor_loss")
-    entropy = _fmt_metric(update_info, "actor/entropy")
-    temperature = _fmt_metric(update_info, "actor/temperature")
-    temp_loss = _fmt_metric(update_info, "temperature/temperature_loss")
+    # actor
+    actor_loss = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "actor/actor_loss",
+            "actor/loss",
+            "actor_loss",
+        ],
+    )
+    entropy = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "actor/entropy",
+            "entropy",
+        ],
+    )
+
+    # temperature
+    temperature = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "actor/temperature",
+            "temperature/temperature",
+            "temperature",
+        ],
+    )
+    temp_loss = _fmt_metric_any(
+        update_info,
+        critics_info,
+        [
+            "temperature/temperature_loss",
+            "temperature/loss",
+            "temperature_loss",
+        ],
+    )
 
     times = timer.get_average_times()
+
     _log_info(
         "learner_step",
         "[learner-train-debug] "
         f"step={step} | "
-        f"critic_loss={_format_metric_value(critic_loss)} pred_q={_format_metric_value(predicted_qs)} "
-        f"target_q={_format_metric_value(target_qs)} reward_mean={_format_metric_value(rewards)} | "
-        f"grasp_loss={_format_metric_value(grasp_loss)} grasp_pred_q={_format_metric_value(grasp_pred_q)} "
-        f"grasp_target_q={_format_metric_value(grasp_target_q)} grasp_reward_mean={_format_metric_value(grasp_rewards)} | "
-        f"actor_loss={_format_metric_value(actor_loss)} entropy={_format_metric_value(entropy)} "
-        f"temperature={_format_metric_value(temperature)} temp_loss={_format_metric_value(temp_loss)} | "
+        f"critic_loss={_format_metric_value(critic_loss)} "
+        f"pred_q={_format_metric_value(predicted_qs)} "
+        f"target_q={_format_metric_value(target_qs)} "
+        f"reward_mean={_format_metric_value(rewards)} | "
+        f"grasp_loss={_format_metric_value(grasp_loss)} "
+        f"grasp_pred_q={_format_metric_value(grasp_pred_q)} "
+        f"grasp_target_q={_format_metric_value(grasp_target_q)} "
+        f"grasp_reward_mean={_format_metric_value(grasp_rewards)} | "
+        f"actor_loss={_format_metric_value(actor_loss)} "
+        f"entropy={_format_metric_value(entropy)} "
+        f"temperature={_format_metric_value(temperature)} "
+        f"temp_loss={_format_metric_value(temp_loss)} | "
         f"timer_train={_format_metric_value(times.get('train'), 4)} "
         f"timer_train_critics={_format_metric_value(times.get('train_critics'), 4)} "
         f"timer_sample_replay={_format_metric_value(times.get('sample_replay_buffer'), 4)}",
         "blue",
     )
-
 
 
 # =============================================================================
@@ -1678,6 +1864,360 @@ def _np_to_jsonable(x):
     return x
 
 
+# =============================================================================
+# 9.93 WandB extra diagnostics helpers
+# =============================================================================
+
+def _finite_np(x):
+    try:
+        arr = np.asarray(x, dtype=np.float64).reshape(-1)
+        arr = arr[np.isfinite(arr)]
+        return arr
+    except Exception:
+        return np.zeros((0,), dtype=np.float64)
+
+
+def _finite_mean(x, default=0.0):
+    arr = _finite_np(x)
+    return float(np.mean(arr)) if arr.size > 0 else float(default)
+
+
+def _finite_min(x, default=0.0):
+    arr = _finite_np(x)
+    return float(np.min(arr)) if arr.size > 0 else float(default)
+
+
+def _finite_max(x, default=0.0):
+    arr = _finite_np(x)
+    return float(np.max(arr)) if arr.size > 0 else float(default)
+
+
+def _as_action7(action):
+    a = np.asarray(action, dtype=np.float32).reshape(-1)
+    out = np.zeros((7,), dtype=np.float32)
+    n = min(7, a.size)
+    if n > 0:
+        out[:n] = a[:n]
+    return out
+
+
+def _action_stats_from_actions(actions, *, config, prefix):
+    """
+    actions: list/array of final stored actions.
+    输出全部是 scalar，适合直接 wandb log。
+    """
+    if actions is None or len(actions) == 0:
+        return {
+            f"{prefix}/count": 0,
+            f"{prefix}/absmax_mean": 0.0,
+            f"{prefix}/absmax_max": 0.0,
+            f"{prefix}/saturation_rate_0p98": 0.0,
+            f"{prefix}/pos_l2_mm_mean": 0.0,
+            f"{prefix}/pos_l2_mm_max": 0.0,
+            f"{prefix}/rot_l2_deg_mean": 0.0,
+            f"{prefix}/rot_l2_deg_max": 0.0,
+        }
+
+    arr = np.stack([_as_action7(a) for a in actions], axis=0).astype(np.float32)
+    arm = arr[:, :6]
+    pos = arr[:, :3]
+    rot = arr[:, 3:6]
+    grip = arr[:, 6]
+
+    pos_scale = float(getattr(config, "POS_SCALE", 0.02))
+    rot_scale = float(getattr(config, "ROT_SCALE", 0.04))
+
+    absmax = np.max(np.abs(arm), axis=1)
+    pos_l2_mm = np.linalg.norm(pos * pos_scale * 1000.0, axis=1)
+    rot_l2_deg = np.linalg.norm(rot * rot_scale * 180.0 / np.pi, axis=1)
+
+    out = {
+        f"{prefix}/count": int(arr.shape[0]),
+        f"{prefix}/absmax_mean": float(np.mean(absmax)),
+        f"{prefix}/absmax_max": float(np.max(absmax)),
+        f"{prefix}/mean_abs": float(np.mean(np.abs(arm))),
+        f"{prefix}/saturation_rate_0p98": float(np.mean(absmax >= 0.98)),
+        f"{prefix}/saturation_rate_0p90": float(np.mean(absmax >= 0.90)),
+        f"{prefix}/pos_l2_mm_mean": float(np.mean(pos_l2_mm)),
+        f"{prefix}/pos_l2_mm_max": float(np.max(pos_l2_mm)),
+        f"{prefix}/rot_l2_deg_mean": float(np.mean(rot_l2_deg)),
+        f"{prefix}/rot_l2_deg_max": float(np.max(rot_l2_deg)),
+        f"{prefix}/gripper_close_rate": float(np.mean(grip <= -0.5)),
+        f"{prefix}/gripper_open_rate": float(np.mean(grip >= 0.5)),
+        f"{prefix}/gripper_hold_rate": float(np.mean(np.abs(grip) < 0.5)),
+        f"{prefix}/gripper_event_rate": float(np.mean(np.abs(grip) >= 0.5)),
+    }
+
+    for i in range(6):
+        out[f"{prefix}/a{i}_abs_mean"] = float(np.mean(np.abs(arr[:, i])))
+        out[f"{prefix}/a{i}_abs_max"] = float(np.max(np.abs(arr[:, i])))
+
+    return out
+
+
+def _episode_q_wandb_stats(q_values, *, prefix="episode_q"):
+    if not q_values:
+        return {
+            f"{prefix}/q_eval_ok_rate": 0.0,
+            f"{prefix}/critic_q_mean_mean": 0.0,
+            f"{prefix}/grasp_q_selected_mean": 0.0,
+        }
+
+    ok = []
+    critic_means = []
+    critic_mins = []
+    critic_maxs = []
+    grasp_selected = []
+
+    for q in q_values:
+        if not isinstance(q, dict):
+            continue
+        ok.append(float(bool(q.get("q_eval_ok", False))))
+
+        if q.get("critic_q_mean", None) is not None:
+            critic_means.append(float(q["critic_q_mean"]))
+        if q.get("critic_q_min", None) is not None:
+            critic_mins.append(float(q["critic_q_min"]))
+        if q.get("critic_q_max", None) is not None:
+            critic_maxs.append(float(q["critic_q_max"]))
+        if q.get("grasp_q_selected", None) is not None:
+            grasp_selected.append(float(q["grasp_q_selected"]))
+
+    out = {
+        f"{prefix}/q_eval_ok_rate": _finite_mean(ok, 0.0),
+        f"{prefix}/critic_q_mean_mean": _finite_mean(critic_means, 0.0),
+        f"{prefix}/critic_q_mean_min": _finite_min(critic_means, 0.0),
+        f"{prefix}/critic_q_mean_max": _finite_max(critic_means, 0.0),
+        f"{prefix}/critic_q_min_min": _finite_min(critic_mins, 0.0),
+        f"{prefix}/critic_q_max_max": _finite_max(critic_maxs, 0.0),
+        f"{prefix}/grasp_q_selected_mean": _finite_mean(grasp_selected, 0.0),
+        f"{prefix}/grasp_q_selected_min": _finite_min(grasp_selected, 0.0),
+        f"{prefix}/grasp_q_selected_max": _finite_max(grasp_selected, 0.0),
+    }
+
+    if len(critic_means) > 0:
+        out[f"{prefix}/critic_q_mean_first"] = float(critic_means[0])
+        out[f"{prefix}/critic_q_mean_last"] = float(critic_means[-1])
+
+    if len(grasp_selected) > 0:
+        out[f"{prefix}/grasp_q_selected_first"] = float(grasp_selected[0])
+        out[f"{prefix}/grasp_q_selected_last"] = float(grasp_selected[-1])
+
+    return out
+
+
+def _episode_action_scale_wandb_stats(step_records, *, config):
+    """
+    统计 actor 原始动作 vs 缩放后动作。
+    只对非 VR intervention 步更有意义。
+    """
+    raw_actions = []
+    scaled_actions = []
+    changed_flags = []
+
+    for rec in step_records:
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("had_intervene_action", False):
+            continue
+
+        raw = rec.get("policy_action_before_exec_scale", None)
+        scaled = rec.get("policy_action", None)
+        if raw is None or scaled is None:
+            continue
+
+        raw_actions.append(_as_action7(raw))
+        scaled_actions.append(_as_action7(scaled))
+        changed_flags.append(float(bool(rec.get("policy_exec_scale_changed", False))))
+
+    out = {}
+
+    out.update(_action_stats_from_actions(
+        raw_actions,
+        config=config,
+        prefix="actor_scale_episode/raw_policy_action",
+    ))
+
+    out.update(_action_stats_from_actions(
+        scaled_actions,
+        config=config,
+        prefix="actor_scale_episode/scaled_exec_action",
+    ))
+
+    if len(raw_actions) > 0 and len(scaled_actions) > 0:
+        raw_arr = np.stack(raw_actions, axis=0)
+        scaled_arr = np.stack(scaled_actions, axis=0)
+        diff = raw_arr[:, :6] - scaled_arr[:, :6]
+
+        out["actor_scale_episode/changed_rate"] = _finite_mean(changed_flags, 0.0)
+        out["actor_scale_episode/raw_minus_scaled_absmax_mean"] = float(np.mean(np.max(np.abs(diff), axis=1)))
+        out["actor_scale_episode/raw_minus_scaled_l2_mean"] = float(np.mean(np.linalg.norm(diff, axis=1)))
+    else:
+        out["actor_scale_episode/changed_rate"] = 0.0
+        out["actor_scale_episode/raw_minus_scaled_absmax_mean"] = 0.0
+        out["actor_scale_episode/raw_minus_scaled_l2_mean"] = 0.0
+
+    return out
+
+
+def _actor_episode_wandb_payload(
+    *,
+    episode_index,
+    episode_start_step,
+    episode_end_step,
+    transitions,
+    step_records,
+    q_values,
+    q_summary,
+    ep_debug,
+    flush_stats,
+    running_return,
+    intervention_count,
+    intervention_steps,
+    network_debug,
+    config,
+    data_store_len,
+    intvn_data_store_len,
+):
+    n = int(len(transitions))
+    rewards = [_safe_float(t.get("rewards", 0.0), 0.0) for t in transitions]
+    dones = [float(bool(t.get("dones", False))) for t in transitions]
+    masks = [_safe_float(t.get("masks", 1.0), 1.0) for t in transitions]
+    actions = [t.get("actions", np.zeros(7, dtype=np.float32)) for t in transitions]
+
+    vr_steps = int(sum(1 for r in step_records if isinstance(r, dict) and r.get("had_intervene_action", False)))
+    policy_steps = max(0, n - vr_steps)
+
+    grip = np.asarray([_as_action7(a)[6] for a in actions], dtype=np.float32) if actions else np.zeros((0,), dtype=np.float32)
+    grasp_penalties = [_safe_float(t.get("grasp_penalty", 0.0), 0.0) for t in transitions]
+
+    payload = {
+        "episode/index": int(episode_index),
+        "episode/start_step": int(episode_start_step),
+        "episode/end_step": int(episode_end_step),
+        "episode/length": n,
+        "episode/return": float(running_return),
+        "episode/env_return": float(ep_debug.get("return", 0.0)),
+        "episode/success": float(ep_debug.get("success", 0.0)),
+        "episode/duration_sec": float(ep_debug.get("duration", 0.0)),
+        "episode/reward_mean": _finite_mean(rewards, 0.0),
+        "episode/reward_sum": float(np.sum(rewards)) if rewards else 0.0,
+        "episode/done_count": int(np.sum(dones)) if dones else 0,
+        "episode/mask_mean": _finite_mean(masks, 0.0),
+
+        "intervention/count": int(intervention_count),
+        "intervention/steps": int(intervention_steps),
+        "intervention/ratio": float(intervention_steps / max(1, n)),
+        "intervention/pending_flushed": int(flush_stats.get("pending", 0)),
+        "intervention/feedback_abs2rel_converted": int(flush_stats.get("converted", 0)),
+        "intervention/feedback_abs2rel_fallback": int(flush_stats.get("fallback", 0)),
+        "data/policy_steps_in_episode": int(policy_steps),
+        "data/vr_steps_in_episode": int(vr_steps),
+        "data/vr_ratio_in_episode": float(vr_steps / max(1, n)),
+        "data/replay_queue_size_actor": int(data_store_len),
+        "data/intvn_queue_size_actor": int(intvn_data_store_len),
+
+        "gripper_episode/close_count": int(np.sum(grip <= -0.5)) if grip.size else 0,
+        "gripper_episode/open_count": int(np.sum(grip >= 0.5)) if grip.size else 0,
+        "gripper_episode/hold_count": int(np.sum(np.abs(grip) < 0.5)) if grip.size else 0,
+        "gripper_episode/event_count": int(np.sum(np.abs(grip) >= 0.5)) if grip.size else 0,
+        "gripper_episode/grasp_penalty_nonzero_rate": float(np.mean(np.abs(grasp_penalties) > 1e-8)) if grasp_penalties else 0.0,
+
+        "network/recv_count": int(network_debug.get("recv_count", 0)),
+        "network/applied_count": int(network_debug.get("applied_count", 0)),
+        "network/pending_recv_count": int(network_debug.get("pending_recv_count", 0)),
+        "network/duplicate_recv_count": int(network_debug.get("duplicate_recv_count", 0)),
+
+        "episode_q/q_eval_ok": float(bool(q_summary.get("ok", False))),
+    }
+
+    payload.update(_action_stats_from_actions(
+        actions,
+        config=config,
+        prefix="actor_action_episode/final_buffer_action",
+    ))
+
+    payload.update(_episode_action_scale_wandb_stats(
+        step_records,
+        config=config,
+    ))
+
+    payload.update(_episode_q_wandb_stats(
+        q_values,
+        prefix="episode_q",
+    ))
+
+    return payload
+
+
+def _actor_step_wandb_payload(
+    *,
+    step,
+    episode_index,
+    action_source,
+    had_intervene_action,
+    policy_actions_before_exec_scale,
+    policy_actions,
+    final_actions,
+    reward,
+    done,
+    truncated,
+    data_store_len,
+    intvn_data_store_len,
+    network_debug,
+    timer,
+    config,
+):
+    raw = _as_action7(policy_actions_before_exec_scale)
+    exec_a = _as_action7(policy_actions)
+    final_a = _as_action7(final_actions)
+
+    pos_scale = float(getattr(config, "POS_SCALE", 0.02))
+    rot_scale = float(getattr(config, "ROT_SCALE", 0.04))
+
+    final_pos_l2_mm = float(np.linalg.norm(final_a[:3] * pos_scale * 1000.0))
+    final_rot_l2_deg = float(np.linalg.norm(final_a[3:6] * rot_scale * 180.0 / np.pi))
+
+    payload = {
+        "actor_step/global_step": int(step),
+        "actor_step/episode_index": int(episode_index),
+        "actor_step/is_policy": float(action_source == "policy"),
+        "actor_step/is_random": float(action_source == "random"),
+        "actor_step/is_vr": float(bool(had_intervene_action)),
+        "actor_step/reward": float(_safe_float(reward, 0.0)),
+        "actor_step/done": float(bool(done)),
+        "actor_step/truncated": float(bool(truncated)),
+
+        "actor_action/final_absmax": float(np.max(np.abs(final_a[:6]))),
+        "actor_action/final_mean_abs": float(np.mean(np.abs(final_a[:6]))),
+        "actor_action/final_saturation_0p98": float(np.max(np.abs(final_a[:6])) >= 0.98),
+        "actor_action/final_pos_l2_mm": final_pos_l2_mm,
+        "actor_action/final_rot_l2_deg": final_rot_l2_deg,
+
+        "actor_scale/raw_absmax": float(np.max(np.abs(raw[:6]))),
+        "actor_scale/scaled_exec_absmax": float(np.max(np.abs(exec_a[:6]))),
+        "actor_scale/raw_minus_scaled_absmax": float(np.max(np.abs(raw[:6] - exec_a[:6]))),
+
+        "gripper/action_label": float(final_a[6]),
+        "gripper/is_close": float(final_a[6] <= -0.5),
+        "gripper/is_open": float(final_a[6] >= 0.5),
+        "gripper/is_hold": float(abs(float(final_a[6])) < 0.5),
+
+        "data/replay_queue_size_actor": int(data_store_len),
+        "data/intvn_queue_size_actor": int(intvn_data_store_len),
+
+        "network/recv_count": int(network_debug.get("recv_count", 0)),
+        "network/applied_count": int(network_debug.get("applied_count", 0)),
+        "network/pending_recv_count": int(network_debug.get("pending_recv_count", 0)),
+        "network/duplicate_recv_count": int(network_debug.get("duplicate_recv_count", 0)),
+    }
+
+    for i in range(6):
+        payload[f"actor_action/a{i}"] = float(final_a[i])
+        payload[f"actor_action/a{i}_abs"] = float(abs(float(final_a[i])))
+
+    return payload
+
 def _make_episode_batch_for_q(transitions):
     return {
         "observations": _recursive_stack_for_jax([t["observations"] for t in transitions]),
@@ -1714,18 +2254,20 @@ def _eval_episode_critic_qs(agent, transitions, *, batch_size=64):
             rng = jax.random.PRNGKey(700000 + start)
             critic_q_np = None
             critic_err = ""
+
             try_actions = []
             if act_full.shape[-1] == 7:
-                try_actions.append(jax.device_put(act_full[..., :-1]))
-            try_actions.append(jax.device_put(act_full))
-            for a_try in try_actions:
+                try_actions.append(("arm6", jax.device_put(act_full[..., :-1])))
+            try_actions.append(("full", jax.device_put(act_full)))
+
+            for action_try_name, a_try in try_actions:
                 try:
                     qs = agent.forward_critic(obs_b, a_try, rng=rng, train=False)
                     critic_q_np = np.asarray(jax.device_get(qs), dtype=np.float32)
                     critic_err = ""
                     break
                 except Exception as e:
-                    critic_err = repr(e)
+                    critic_err = f"{action_try_name}: {repr(e)}"
             grasp_q_np = None
             grasp_err = ""
             if hasattr(agent, "forward_grasp_critic"):
@@ -1992,7 +2534,13 @@ def _save_complete_actor_episode(
         "green",
     )
 
-    return path
+    return {
+        "path": path,
+        "csv_path": csv_path,
+        "q_values": q_values,
+        "q_summary": q_summary,
+        "metadata": metadata,
+    }   
 
 # =============================================================================
 # 10. actor
@@ -2710,22 +3258,60 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config, traine
                         complete_episode_transitions.append(final_t)
                         complete_episode_records.append(rec)
 
-                    _save_complete_actor_episode(
-                        checkpoint_path=FLAGS.checkpoint_path, episode_index=episode_index, episode_start_step=episode_start_step, episode_end_step=step,
-                        transitions=complete_episode_transitions, step_records=complete_episode_records, info=info, ep_debug=ep_debug, flush_stats=flush_stats,
-                        running_return=running_return, intervention_count=intervention_count, intervention_steps=intervention_steps, agent=agent, config=config, network_debug=network_debug,
+                    episode_save_result = _save_complete_actor_episode(
+                        checkpoint_path=FLAGS.checkpoint_path,
+                        episode_index=episode_index,
+                        episode_start_step=episode_start_step,
+                        episode_end_step=step,
+                        transitions=complete_episode_transitions,
+                        step_records=complete_episode_records,
+                        info=info,
+                        ep_debug=ep_debug,
+                        flush_stats=flush_stats,
+                        running_return=running_return,
+                        intervention_count=intervention_count,
+                        intervention_steps=intervention_steps,
+                        agent=agent,
+                        config=config,
+                        network_debug=network_debug,
                     )
 
-                    _log_info(
-                        "actor_episode",
-                        f"[actor-episode-end] episode={episode_index}, step={step}, return={running_return:.4f}, "
-                        f"env_return={ep_debug['return']:.4f}, length={ep_debug['length']}, duration={ep_debug['duration']:.3f}, "
-                        f"success={ep_debug['success']}, intervention_count={intervention_count}, "
-                        f"intervention_steps={intervention_steps}, "
-                        f"feedback_abs2rel_converted={flush_stats['converted']}, fallback={flush_stats['fallback']}, "
-                        f"recv_count={network_debug['recv_count']}, applied_count={network_debug['applied_count']}",
-                        "green" if ep_debug["success"] > 0 else "yellow",
-                    )
+                    if LOG_EXTRA_WANDB_DIAGNOSTICS and LOG_ACTOR_EPISODE_DIAGNOSTICS:
+                        try:
+                            if isinstance(episode_save_result, dict):
+                                q_values_for_wandb = episode_save_result.get("q_values", [])
+                                q_summary_for_wandb = episode_save_result.get("q_summary", {})
+                            else:
+                                q_values_for_wandb = []
+                                q_summary_for_wandb = {}
+
+                            episode_wandb_payload = _actor_episode_wandb_payload(
+                                episode_index=episode_index,
+                                episode_start_step=episode_start_step,
+                                episode_end_step=step,
+                                transitions=complete_episode_transitions,
+                                step_records=complete_episode_records,
+                                q_values=q_values_for_wandb,
+                                q_summary=q_summary_for_wandb,
+                                ep_debug=ep_debug,
+                                flush_stats=flush_stats,
+                                running_return=running_return,
+                                intervention_count=intervention_count,
+                                intervention_steps=intervention_steps,
+                                network_debug=network_debug,
+                                config=config,
+                                data_store_len=len(data_store),
+                                intvn_data_store_len=len(intvn_data_store),
+                            )
+
+                            client.request("send-stats", episode_wandb_payload)
+
+                        except Exception as e:
+                            _log_info(
+                                "actor_warning",
+                                f"[actor-send-episode-wandb-warning] {e!r}",
+                                "yellow",
+                            )
 
                     try:
                         client.request("send-stats", {"environment": info})
@@ -2780,10 +3366,37 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng, config, traine
 
             if step % config.log_period == 0:
                 try:
-                    client.request("send-stats", {"timer": timer.get_average_times()})
+                    wandb_payload = {"timer": timer.get_average_times()}
+
+                    if LOG_EXTRA_WANDB_DIAGNOSTICS and LOG_ACTOR_STEP_DIAGNOSTICS:
+                        wandb_payload.update(
+                            _actor_step_wandb_payload(
+                                step=step,
+                                episode_index=episode_index,
+                                action_source=action_source,
+                                had_intervene_action=had_intervene_action,
+                                policy_actions_before_exec_scale=policy_actions_before_exec_scale,
+                                policy_actions=policy_actions,
+                                final_actions=actions,
+                                reward=reward,
+                                done=done,
+                                truncated=truncated,
+                                data_store_len=len(data_store),
+                                intvn_data_store_len=len(intvn_data_store),
+                                network_debug=network_debug,
+                                timer=timer,
+                                config=config,
+                            )
+                        )
+
+                    client.request("send-stats", wandb_payload)
+
                 except Exception as e:
-                    if not FLAGS.minimal_logs:
-                        print_yellow(f"[actor-send-timer-warning] {e!r}")
+                    _log_info(
+                        "actor_warning",
+                        f"[actor-send-wandb-step-warning] {e!r}",
+                        "yellow",
+                    )
 
     finally:
         remaining_online = len(transitions)
@@ -2808,10 +3421,56 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger=None):
     start_step = int(os.path.basename(latest_ckpt)[11:]) + 1 if latest_ckpt is not None else 0
     step = start_step
 
+    episode_success_history = []
+    episode_return_history = []
+    episode_intervention_ratio_history = []
+
     def stats_callback(type: str, payload: dict) -> dict:
         assert type == "send-stats", f"Invalid request type: {type}"
+
+        if payload is None:
+            payload = {}
+        else:
+            payload = dict(payload)
+
+        # learner 端 buffer size：每次 actor 发送 stats 时顺手记录
+        try:
+            payload["data/replay_buffer_size"] = int(len(replay_buffer))
+            payload["data/demo_buffer_size"] = int(len(demo_buffer))
+            payload["data/total_buffer_size"] = int(len(replay_buffer) + len(demo_buffer))
+        except Exception:
+            pass
+
+        # episode rolling 指标：只在 episode payload 里出现 episode/success 时更新
+        if "episode/success" in payload:
+            try:
+                s = float(payload.get("episode/success", 0.0))
+                r = float(payload.get("episode/return", 0.0))
+                ir = float(payload.get("intervention/ratio", 0.0))
+
+                episode_success_history.append(s)
+                episode_return_history.append(r)
+                episode_intervention_ratio_history.append(ir)
+
+                w = int(max(1, WANDB_EPISODE_ROLLING_WINDOW))
+
+                payload[f"episode/success_rate_last_{w}"] = float(
+                    np.mean(episode_success_history[-w:])
+                )
+                payload[f"episode/return_mean_last_{w}"] = float(
+                    np.mean(episode_return_history[-w:])
+                )
+                payload[f"intervention/ratio_mean_last_{w}"] = float(
+                    np.mean(episode_intervention_ratio_history[-w:])
+                )
+                payload["episode/count_logged"] = int(len(episode_success_history))
+
+            except Exception as e:
+                payload["episode/rolling_metric_error"] = 1.0
+
         if wandb_logger is not None:
             wandb_logger.log(payload, step=step)
+
         return {}
 
     trainer_cfg = _build_trainer_config()
