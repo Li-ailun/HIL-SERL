@@ -44,6 +44,16 @@ replay_episode_compare_live_delta.py
     --execute \
     --csv ./inspect/episode_latest_live_compare.csv
 
+    
+  #执行特定的episode
+    python inspect/replay_episode_compare_live_delta.py \
+  --root ./rlpd_checkpoints_single \
+  --path ./rlpd_checkpoints_single/episode/episode_000000_steps_0_336_len_337_success_2026-04-30_19-12-18.pkl \
+  --start 0 \
+  --end 336 \
+  --execute \
+  --csv ./inspect/episode_000004_live_compare_0_120.csv
+
 注意：
   - 不要把 action[:6] 手动乘 scale 后再传给 env.step。
   - env.step(action) 内部会按 POS_SCALE / ROT_SCALE 执行。
